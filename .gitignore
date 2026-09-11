@@ -1,0 +1,8 @@
+.tools/
+**/bin/
+**/obj/
+.vs/
+artifacts/
+*.user
+*.log
+.agents/

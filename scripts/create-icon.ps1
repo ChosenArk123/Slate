@@ -1,0 +1,32 @@
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$assetDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'Slate\Assets'
+New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+$bitmap = [System.Drawing.Bitmap]::new(256, 256)
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+$background = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 30, 32, 35))
+$foreground = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 224, 225, 217))
+$muted = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 102, 108, 109))
+$shape = [System.Drawing.Drawing2D.GraphicsPath]::new()
+$shape.AddArc(8, 8, 64, 64, 180, 90)
+$shape.AddArc(184, 8, 64, 64, 270, 90)
+$shape.AddArc(184, 184, 64, 64, 0, 90)
+$shape.AddArc(8, 184, 64, 64, 90, 90)
+$shape.CloseFigure()
+$graphics.FillPath($background, $shape)
+$graphics.FillRectangle($muted, 53, 58, 29, 140)
+$graphics.FillRectangle($foreground, 95, 58, 108, 17)
+$graphics.FillRectangle($foreground, 95, 88, 17, 110)
+$graphics.FillRectangle($foreground, 125, 181, 78, 17)
+$stream = [System.IO.MemoryStream]::new()
+$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+$png = $stream.ToArray()
+$file = [System.IO.File]::Create((Join-Path $assetDir 'Slate.ico'))
+$writer = [System.IO.BinaryWriter]::new($file)
+$writer.Write([uint16]0); $writer.Write([uint16]1); $writer.Write([uint16]1)
+$writer.Write([byte]0); $writer.Write([byte]0); $writer.Write([byte]0); $writer.Write([byte]0)
+$writer.Write([uint16]1); $writer.Write([uint16]32); $writer.Write([uint32]$png.Length); $writer.Write([uint32]22)
+$writer.Write($png)
+$writer.Dispose(); $stream.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
+$shape.Dispose(); $background.Dispose(); $foreground.Dispose(); $muted.Dispose()
