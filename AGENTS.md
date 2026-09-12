@@ -61,7 +61,7 @@ Console executable using a lightweight `Check`/`Assert` harness (no external tes
 
 | File | Checks | Purpose |
 |---|---|---|
-| `Program.cs` | 66 | Tests covering `Navigation.Resolve`, frame URL filtering, local file safety, `BrowserSession` lifecycle (tab CRUD, workspace management, pinning, temporary tabs, InPrivate isolation, session restore, tab cap), `StateStore` round-trip and corruption recovery, `FaviconStore` (origin keying, PNG validation, concurrency, cache clearing, race conditions), `BrowserCommandRegistry` (shortcut matching, text-editing passthrough, display labels), `DownloadSafety` (traversal, device names, ADS, collision-free naming), and `OmniboxService` (ranking, deduplication). |
+| `Program.cs` | 84 | Tests covering `Navigation.Resolve`, frame URL filtering, local file safety, `BrowserSession` lifecycle (tab CRUD, workspace management, pinning, temporary tabs, InPrivate isolation, session restore, tab cap), `StateStore` round-trip and corruption recovery, `FaviconStore` (origin keying, PNG validation, concurrency, cache clearing, race conditions), `BrowserCommandRegistry` (shortcut matching, text-editing passthrough, display labels), `DownloadSafety` (traversal, device names, ADS, collision-free naming), and `OmniboxService` (ranking, deduplication). |
 | `PasswordTests.cs` | 29 | Cryptographic unit tests for `CredentialOrigin` (canonicalization, port isolation, Punycode, invalid input rejection), `PasswordGenerator` (entropy, length, character-class guarantees), and `CredentialVault` (CRUD, conflict detection, envelope tamper resistance, durability, read-only backup fallback). |
 
 ---
@@ -78,13 +78,13 @@ Console executable using a lightweight `Check`/`Assert` harness (no external tes
 # Build + publish to artifacts\Slate\:
 .\scripts\build.ps1 -Publish
 
-# Headless core unit tests only (95 checks):
+# Headless core unit tests only (114 checks):
 # When system dotnet is an SDK:
 dotnet run --project Slate.Tests/Slate.Tests.csproj
 # When using workspace embedded SDK:
 .tools\dotnet\dotnet.exe run --project Slate.Tests/Slate.Tests.csproj
 
-# GUI smoke tests (requires Release build, launches app headless with loopback fixture - 309 checks):
+# GUI smoke tests (requires Release build, launches app with loopback fixture - 312 checks):
 .\scripts\smoke-test.ps1
 
 # Run the app:

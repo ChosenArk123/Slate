@@ -74,26 +74,32 @@ public sealed class NavigationCoordinator
         return false;
     }
 
-    public string BuildViewSourceHtml(string targetUrl, string rawSource)
+    public string BuildViewSourceHtml(string targetUrl, string sourceCode)
     {
-        string encodedUrl = WebUtility.HtmlEncode(targetUrl);
-        string encodedSource = WebUtility.HtmlEncode(rawSource);
-
-        return $$"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <title>Source of {{encodedUrl}}</title>
-                <style>
-                    body { font-family: Consolas, 'Courier New', monospace; font-size: 13px; line-height: 1.5; padding: 16px; background: #1e1e1e; color: #d4d4d4; }
-                    pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
-                </style>
-            </head>
-            <body>
-                <pre><code>{{encodedSource}}</code></pre>
-            </body>
-            </html>
-            """;
+        var lines = sourceCode.Split('\n');
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Source of ");
+        sb.Append(WebUtility.HtmlEncode(targetUrl));
+        sb.Append("</title><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'\"><style>");
+        sb.Append(@"
+body { margin: 0; padding: 16px; background: #121212; color: #dcdcdc; font-family: 'Consolas', 'Cascadia Code', 'Courier New', monospace; font-size: 13px; line-height: 1.5; }
+.line { display: flex; }
+.ln { width: 50px; text-align: right; margin-right: 18px; user-select: none; color: #707070; flex-shrink: 0; }
+.code { white-space: pre-wrap; word-break: break-all; flex: 1; }
+");
+        sb.Append("</style></head><body>");
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lineNum = i + 1;
+            var lineText = lines[i].TrimEnd('\r');
+            var encoded = WebUtility.HtmlEncode(lineText);
+            sb.Append("<div class=\"line\"><span class=\"ln\">");
+            sb.Append(lineNum);
+            sb.Append("</span><span class=\"code\">");
+            sb.Append(string.IsNullOrEmpty(encoded) ? "&nbsp;" : encoded);
+            sb.Append("</span></div>");
+        }
+        sb.Append("</body></html>");
+        return sb.ToString();
     }
 }

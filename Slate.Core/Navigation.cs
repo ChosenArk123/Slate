@@ -62,7 +62,7 @@ public static class Navigation
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
         if (uri.Scheme is "http" or "https") return IsWebUrl(url);
         if (uri.Scheme == "about") return url is "about:blank" or "about:srcdoc";
-        return uri.Scheme is "data" or "blob" or "javascript";
+        return uri.Scheme is "data" or "blob";
     }
 
     public static bool IsLoopbackOrLocalHost(string? host)
@@ -105,6 +105,14 @@ public static class Navigation
         }
         return false;
     }
+
+    /// <summary>
+    /// Returns true only for a normal HTTPS web origin. Unlike <see cref="IsSecureOrigin"/>,
+    /// this deliberately excludes loopback HTTP: automatic credential delivery must not trust
+    /// a process merely because it has bound a local port.
+    /// </summary>
+    public static bool IsHttpsOrigin(string? origin) => IsWebUrl(origin) &&
+        Uri.TryCreate(origin, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps;
 
     public static string? WebOrigin(string? url) => IsWebUrl(url)
         ? new Uri(url!).GetLeftPart(UriPartial.Authority)

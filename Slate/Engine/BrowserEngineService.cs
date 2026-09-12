@@ -21,10 +21,10 @@ public sealed class BrowserEngineService
     private static readonly TimeSpan PopupBurstWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan PermissionBurstWindow = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan PermissionRepeatWindow = TimeSpan.FromSeconds(30);
-    private const int MaximumPopupsPerBurst = 5;
-    private const int MaximumGlobalPopupsPerBurst = 10;
-    private const int MaximumPermissionPromptsPerBurst = 3;
-    private const int MaximumGlobalPermissionPromptsPerBurst = 6;
+    public const int MaximumPopupsPerBurst = 5;
+    public const int MaximumGlobalPopupsPerBurst = 10;
+    public const int MaximumPermissionPromptsPerBurst = 3;
+    public const int MaximumGlobalPermissionPromptsPerBurst = 6;
     private readonly bool _hardenedIsolation;
 
     public BrowserEngineService(string userDataFolder, bool hardenedIsolation = false)
@@ -112,6 +112,15 @@ public sealed class BrowserEngineService
         _globalPermissionAttempts.Enqueue(now);
         _lastPermissionPrompt[key] = now;
         return true;
+    }
+
+    public void ClearRateLimits()
+    {
+        _popupAttempts.Clear();
+        _globalPopupAttempts.Clear();
+        _permissionAttempts.Clear();
+        _globalPermissionAttempts.Clear();
+        _lastPermissionPrompt.Clear();
     }
 
     private static void CleanOldAttempts(Queue<DateTimeOffset> queue, DateTimeOffset now, TimeSpan window)

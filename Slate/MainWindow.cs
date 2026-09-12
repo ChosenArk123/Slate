@@ -155,6 +155,13 @@ public sealed partial class MainWindow : Window
                     await MemoryBenchmarkRunner.RunBenchmarkAsync(this, benchmarkPath);
                 });
             }
+            if (App.SmokeOutput is { } smokePath)
+            {
+                _ = DispatcherQueue.TryEnqueue(async () =>
+                {
+                    await RunSmokeTestsAsync(smokePath);
+                });
+            }
         };
         AppWindow.Closing += (_, _) => Shutdown();
         Closed += (_, _) => Shutdown();
@@ -214,7 +221,7 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(newTab, 1); _sidebar.Children.Add(newTab);
         var scroll = new ScrollViewer { Content = _tabList, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 4, 0, 8) };
         Grid.SetRow(scroll, 2); _sidebar.Children.Add(scroll);
-        var bottom = new StackPanel { Spacing = 4, Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+        var bottom = new StackPanel { Spacing = 4 };
         foreach (var (icon, label, action) in new (string, string, Func<Task>)[]
         {
             ("\uE721", "Command palette", () => ShowPaletteAsync()),
@@ -224,7 +231,6 @@ public sealed partial class MainWindow : Window
         })
         {
             var button = IconButton(icon, label, action); button.Content = IconSlot(Icon(icon));
-            button.Width = 44;
             button.Tag = (icon, label); button.HorizontalAlignment = HorizontalAlignment.Stretch;
             button.HorizontalContentAlignment = HorizontalAlignment.Stretch;
             button.Padding = new(8, 0, 8, 0);
@@ -632,15 +638,17 @@ public sealed partial class MainWindow : Window
             }
             if (element is StackPanel panel && panel.Tag is "bottom")
             {
-                panel.Orientation = Collapsed ? Orientation.Vertical : Orientation.Horizontal;
+                panel.Orientation = Orientation.Vertical;
+                panel.HorizontalAlignment = HorizontalAlignment.Stretch;
                 foreach (var button in panel.Children.OfType<Button>())
                 {
                     if (button.Tag is ValueTuple<string, string> meta)
                     {
+                        button.Width = double.NaN;
                         button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        button.HorizontalContentAlignment = HorizontalAlignment.Center;
-                        button.Padding = new(0);
-                        button.Content = IconSlot(Icon(meta.Item1));
+                        button.HorizontalContentAlignment = Collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+                        button.Padding = Collapsed ? new(0) : new(8, 0, 8, 0);
+                        button.Content = Collapsed ? IconSlot(Icon(meta.Item1)) : IconLabel(meta.Item1, meta.Item2);
                     }
                 }
             }
@@ -1027,7 +1035,7 @@ public sealed partial class MainWindow : Window
 
         _currentSuggestions = OmniboxService.GetSuggestions(
             text,
-            _session.State.Tabs,
+            _session.State.Tabs.Where(t => !t.IsPrivate),
             _session.State.History,
             _session.State.Settings.SearchEngine,
             _session.State.Bookmarks,

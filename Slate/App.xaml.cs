@@ -12,23 +12,76 @@ public partial class App : Application
     private Mutex? _instanceLock;
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
-    internal static string ProfileDirectory { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Slate");
+    internal static string? SmokeOutput { get; } = ResolveSmokeOutputPath();
+    internal static string? MemoryBenchmarkOutputPath { get; } = ResolveMemoryBenchmarkOutputPath();
+    internal static string ProfileDirectory { get; } = SmokeOutput is not null
+        ? Path.Combine(Path.GetTempPath(), "slate-smoke-profile-" + Guid.NewGuid().ToString("N"))
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Slate");
     internal static bool HasHardenedIsolationArg { get; } =
         Environment.GetCommandLineArgs().Any(a => a.Equals("--hardened-isolation", StringComparison.OrdinalIgnoreCase) ||
                                                  a.Equals("-hardened-isolation", StringComparison.OrdinalIgnoreCase) ||
                                                  a.Equals("/hardened-isolation", StringComparison.OrdinalIgnoreCase));
-    internal static string? MemoryBenchmarkOutputPath { get; } =
-        Environment.GetCommandLineArgs()
+
+    private static string? ResolveMemoryBenchmarkOutputPath()
+    {
+        var rawPath = Environment.GetCommandLineArgs()
             .FirstOrDefault(a => a.StartsWith("--memory-benchmark=", StringComparison.OrdinalIgnoreCase) ||
                                  a.StartsWith("-memory-benchmark=", StringComparison.OrdinalIgnoreCase) ||
                                  a.StartsWith("/memory-benchmark=", StringComparison.OrdinalIgnoreCase))
-            ?.Split('=', 2)[1]?.Trim('"', '\'') ??
-        (Environment.GetCommandLineArgs().Any(a => a.Equals("--memory-benchmark", StringComparison.OrdinalIgnoreCase) ||
-                                                   a.Equals("-memory-benchmark", StringComparison.OrdinalIgnoreCase) ||
-                                                   a.Equals("/memory-benchmark", StringComparison.OrdinalIgnoreCase))
-            ? Path.Combine(ProfileDirectory, "memory-benchmark.json")
-            : null);
+            ?.Split('=', 2)[1]?.Trim('"', '\'');
+
+        if (rawPath is not null)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath)) return null;
+            if (rawPath.StartsWith(@"\\") || rawPath.StartsWith("//")) return null;
+            try
+            {
+                string fullPath = Path.GetFullPath(rawPath);
+                if (!DownloadSafety.IsSafeLocalFilePath(fullPath)) return null;
+                if (File.Exists(fullPath)) return null;
+                return fullPath;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        if (Environment.GetCommandLineArgs().Any(a => a.Equals("--memory-benchmark", StringComparison.OrdinalIgnoreCase) ||
+                                                     a.Equals("-memory-benchmark", StringComparison.OrdinalIgnoreCase) ||
+                                                     a.Equals("/memory-benchmark", StringComparison.OrdinalIgnoreCase)))
+        {
+            string defaultPath = Path.Combine(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Slate"),
+                "memory-benchmark.json");
+            return File.Exists(defaultPath) ? null : defaultPath;
+        }
+
+        return null;
+    }
+
+    private static string? ResolveSmokeOutputPath()
+    {
+        var rawPath = Environment.GetCommandLineArgs()
+            .FirstOrDefault(a => a.StartsWith("--smoke-test=", StringComparison.OrdinalIgnoreCase) ||
+                                 a.StartsWith("-smoke-test=", StringComparison.OrdinalIgnoreCase) ||
+                                 a.StartsWith("/smoke-test=", StringComparison.OrdinalIgnoreCase))
+            ?.Split('=', 2)[1]?.Trim('"', '\'');
+
+        if (string.IsNullOrWhiteSpace(rawPath)) return null;
+        if (rawPath.StartsWith(@"\\") || rawPath.StartsWith("//")) return null;
+        try
+        {
+            string fullPath = Path.GetFullPath(rawPath);
+            if (!DownloadSafety.IsSafeLocalFilePath(fullPath)) return null;
+            if (File.Exists(fullPath)) return null;
+            return fullPath;
+        }
+        catch
+        {
+            return null;
+        }
+    }
     public App()
     {
         AuditStartupEnvironment();
@@ -158,13 +211,16 @@ public partial class App : Application
     internal static string SanitizeLogMessage(string? message) => LogSanitizer.Sanitize(message);
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _instanceLock = new Mutex(true, "Local\\Slate.Browser." + Environment.UserName, out var firstInstance);
-        if (!firstInstance)
+        if (SmokeOutput is null && MemoryBenchmarkOutputPath is null)
         {
-            foreach (var process in Process.GetProcessesByName("Slate"))
-                if (process.Id != Environment.ProcessId && process.MainWindowHandle != IntPtr.Zero)
-                { ShowWindow(process.MainWindowHandle, 9); SetForegroundWindow(process.MainWindowHandle); break; }
-            _instanceLock.Dispose(); _instanceLock = null; Exit(); return;
+            _instanceLock = new Mutex(true, "Local\\Slate.Browser." + Environment.UserName, out var firstInstance);
+            if (!firstInstance)
+            {
+                foreach (var process in Process.GetProcessesByName("Slate"))
+                    if (process.Id != Environment.ProcessId && process.MainWindowHandle != IntPtr.Zero)
+                    { ShowWindow(process.MainWindowHandle, 9); SetForegroundWindow(process.MainWindowHandle); break; }
+                _instanceLock.Dispose(); _instanceLock = null; Exit(); return;
+            }
         }
         _window = new MainWindow();
         _window.Closed += (_, _) => { _instanceLock?.ReleaseMutex(); _instanceLock?.Dispose(); _instanceLock = null; };

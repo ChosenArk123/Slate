@@ -19,10 +19,10 @@ The scripts use the workspace SDK under `.tools/dotnet` when present, otherwise 
 # Release folder with all application dependencies
 .\scripts\build.ps1 -Publish
 
-# Headless domain and security checks (104 checks)
+# Headless domain and security checks (114 checks)
 .tools\dotnet\dotnet.exe run --project Slate.Tests/Slate.Tests.csproj
 
-# Real WinUI/WebView2 integration checks, with a fresh isolated profile (319 checks)
+# Real WinUI/WebView2 integration checks, with a fresh isolated profile (312 checks)
 .\scripts\smoke-test.ps1
 ```
 

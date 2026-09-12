@@ -155,7 +155,7 @@ internal sealed class PasswordController : IDisposable
             if (Valid(ticket)) SetAccountCount(accounts.Count);
         }
         catch { SetAccountCount(0); }
-        if (accounts.Count == 1 && Valid(ticket) && !_private() && _autofill() && !_temporary() && Navigation.IsSecureOrigin(ticket.Origin))
+        if (accounts.Count == 1 && Valid(ticket) && !_private() && _autofill() && !_temporary() && Navigation.IsHttpsOrigin(ticket.Origin))
             await FillCoreAsync(ticket, accounts[0], true);
     }
     internal Ticket? CaptureTicket() => Ready && CredentialOrigin.Normalize(_core.Source) == _origin &&
@@ -193,14 +193,14 @@ internal sealed class PasswordController : IDisposable
     private async Task<bool> FillCoreAsync(Ticket ticket, CredentialMetadata account, bool automatic)
     {
         if (_operation || _private() || !Valid(ticket) || account.Origin != ticket.Origin ||
-            (automatic && (!_autofill() || _temporary() || !Navigation.IsSecureOrigin(ticket.Origin)))) return false;
+            (automatic && (!_autofill() || _temporary() || !Navigation.IsHttpsOrigin(ticket.Origin)))) return false;
         _operation = true;
         string? password = null;
         try
         {
             password = await _vault.RevealAsync(account.Id, account.Revision);
             if (_private() || !Valid(ticket) ||
-                (automatic && (!_autofill() || _temporary() || !Navigation.IsSecureOrigin(ticket.Origin)))) return false;
+                (automatic && (!_autofill() || _temporary() || !Navigation.IsHttpsOrigin(ticket.Origin)))) return false;
             var result = await Call(ticket, "function(u,p,a){return globalThis.__slatePassword?.fill(u,p,false,a) ?? false;}", account.Username, password, automatic);
             password = "";
             bool filled = result?.ValueKind == JsonValueKind.True;

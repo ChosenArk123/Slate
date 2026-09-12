@@ -518,13 +518,19 @@ public sealed partial class MainWindow
         AutomationProperties.SetName(defaultZoom, "Default page zoom (%)");
         AutomationProperties.SetAutomationId(defaultZoom, "SettingsDefaultZoomNumberBox");
 
+        bool isHardened = _engineService.IsHardenedIsolation;
         var devTools = new ToggleSwitch
         {
-            Header = "Developer tools (F12)",
-            IsOn = settings.DeveloperToolsEnabled
+            Header = isHardened ? "Developer tools (F12) — Disabled in Hardened Isolation" : "Developer tools (F12)",
+            IsOn = !isHardened && settings.DeveloperToolsEnabled,
+            IsEnabled = !isHardened
         };
         AutomationProperties.SetName(devTools, "Developer tools (F12)");
         AutomationProperties.SetAutomationId(devTools, "SettingsDevToolsToggle");
+        if (isHardened)
+        {
+            AutomationProperties.SetHelpText(devTools, "Developer tools are disabled in Hardened Isolation mode.");
+        }
 
         var defaultBrowserButton = new Button
         {
@@ -888,7 +894,7 @@ public sealed partial class MainWindow
         settings.AccentTheme = (accent.SelectedItem as ComboBoxItem)?.Tag as string ?? "Slate";
         settings.SearchEngine = engine.SelectedItem as string ?? "DuckDuckGo";
         settings.StartupBehavior = startupBehavior.SelectedItem as string ?? "Restore previous session";
-        settings.DeveloperToolsEnabled = devTools.IsOn;
+        settings.DeveloperToolsEnabled = devTools.IsOn && !_engineService.IsHardenedIsolation;
         settings.HardenedIsolation = hardenedIsolationToggle.IsOn;
         settings.ShowBookmarksBar = bookmarksBarToggle.IsOn;
         settings.AutofillPasswords = autofillPasswords.IsOn;
@@ -940,7 +946,7 @@ public sealed partial class MainWindow
         {
             if (runtime.View.CoreWebView2 is { } core)
             {
-                core.Settings.AreDevToolsEnabled = settings.DeveloperToolsEnabled;
+                core.Settings.AreDevToolsEnabled = settings.DeveloperToolsEnabled && !_engineService.IsHardenedIsolation;
             }
         }
 

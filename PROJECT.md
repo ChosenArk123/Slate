@@ -55,7 +55,7 @@ Every feature identified during the Survey phase is mapped below with its assign
 | 42 | Tab Sleep/Wake Resource Verification | Verify sleeping tabs suspend properly and resume without memory or controller leaks | M4 | R6, Survey 3 |
 | 43 | E2E Test Harness & Suite (Tiers 1-4) | Comprehensive opaque-box test suite published via `TEST_READY.md` | M5 | R1-R6, Test Track |
 | 44 | 100% E2E Pass & Tier 5 Adversarial | Implementation passes all Tiers 1-4 tests + Tier 5 adversarial stress testing | M6 | Final Milestone |
-| 45 | Native Smoke Tests & Release Build | Verify all 309+ baseline GUI smoke tests pass and `build.ps1 -Release` has 0 warnings/errors | M7 | Acceptance Criteria |
+| 45 | Native Smoke Tests & Release Build | Verify all 312 baseline GUI smoke tests pass and `build.ps1 -Release` has 0 warnings/errors | M7 | Acceptance Criteria |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -66,7 +66,7 @@ Every feature identified during the Survey phase is mapped below with its assign
 | M4 | Adversarial Security Audit Fixes & Lifecycle Hardening (Phases 7 & 8 / R5, R6) | InPrivate favicon leak fix, popup downgrade fix, duplicate tab privacy fix, SavePage safety, command router detachment, lifecycle tests | M3 | PLANNED |
 | M5 | E2E Test Suite Implementation (Dual-Track Test Track) | Test runner, Tiers 1-4 test suite covering all features, publish `TEST_READY.md` | In Parallel with M1-M4 | PLANNED |
 | M6 | Final Milestone: 100% E2E Test Pass & Tier 5 Adversarial Hardening | Verify implementation passes 100% of M5 tests, followed by Tier 5 adversarial coverage hardening | M4, M5 | PLANNED |
-| M7 | Release Build Certification & Native GUI Smoke Tests | Full headless unit tests, native GUI smoke test suite (309+ checks), release build zero warnings/errors | M6 | PLANNED |
+| M7 | Release Build Certification & Native GUI Smoke Tests | Full headless unit tests (114 checks), native GUI smoke test suite (312 checks), release build zero warnings/errors | M6 | PLANNED |
 
 ## Interface Contracts
 ### Credential Vault v2 ↔ Application
@@ -94,7 +94,8 @@ Every feature identified during the Survey phase is mapped below with its assign
 - `Slate/MainWindow.Dialogs.cs`: Settings modal (7 sections), Import browser data review dialog, TLS probing dialog.
 - `Slate/MainWindow.Browser.cs`: InPrivate favicon fix, popup downgrade fix, duplicate tab fix, SavePage safety, tab lifecycle & download safety.
 - `Slate/BrowserCommandRouter.cs`: Keyboard routing with attach & detach methods.
+- `Slate.Tests/Program.cs`: Core checks covering session lifecycle, navigation security, command registry, download safety, omnibox, and favicon store.
 - `Slate.Tests/PasswordTests.cs`: Cryptographic and vault unit tests, CSV import tests.
-- `Slate.Tests/SecurityAuditTests.cs` & `Slate.Tests/SettingsTests.cs`: Targeted tests for security, settings, and lifecycle invariants.
-- `scripts/smoke-test.ps1`: Native GUI automation smoke tests.
+- `Slate.Tests/SecurityAuditTests.cs`: Security audit checks covering command-line validation, UNC rejection, frame URL filtering, and environment variable cataloging.
+- `scripts/smoke-test.ps1`: Native GUI automation smoke tests (312 checks).
 - `scripts/build.ps1`: Release build script.

@@ -43,6 +43,7 @@ public static class OmniboxService
         {
             foreach (var tab in openTabs)
             {
+                if (tab.IsPrivate) continue;
                 if (tab.Url == Navigation.NewTab) continue;
                 bool matchTitle = !string.IsNullOrEmpty(tab.Title) && tab.Title.Contains(query, StringComparison.OrdinalIgnoreCase);
                 bool matchUrl = !string.IsNullOrEmpty(tab.Url) && tab.Url.Contains(query, StringComparison.OrdinalIgnoreCase);

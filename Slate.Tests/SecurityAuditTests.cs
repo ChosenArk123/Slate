@@ -340,6 +340,7 @@ public static class SecurityAuditTests
             Assert(!Navigation.IsAllowedFrameUrl("file://server/share/file.txt"));
             Assert(!Navigation.IsAllowedFrameUrl("powershell:run()"));
             Assert(!Navigation.IsAllowedFrameUrl("custom-scheme://test"));
+            Assert(!Navigation.IsAllowedFrameUrl("javascript:alert(1)"));
 
             // Allowed frame URLs
             Assert(Navigation.IsAllowedFrameUrl("https://example.com/frame"));
@@ -447,6 +448,10 @@ public static class SecurityAuditTests
             Assert(!Navigation.IsSecureOrigin("ftp://example.com"), "FTP must NOT be secure origin");
             Assert(!Navigation.IsSecureOrigin(""), "Empty origin must NOT be secure origin");
             Assert(!Navigation.IsSecureOrigin(null), "Null origin must NOT be secure origin");
+
+            Assert(Navigation.IsHttpsOrigin("https://example.com"), "HTTPS must be eligible for automatic credential delivery");
+            Assert(!Navigation.IsHttpsOrigin("http://localhost:3000"), "Loopback HTTP must require explicit credential selection");
+            Assert(!Navigation.IsHttpsOrigin("http://127.0.0.1:8080"), "IPv4 loopback HTTP must require explicit credential selection");
         });
 
         // -----------------------------------------------------------------
@@ -696,6 +701,12 @@ public static class SecurityAuditTests
             Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--disable-features=site-per-process"], out _));
             Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--arbitrary-unrecognized-switch"], out var r3));
             Assert(r3!.Contains("Unrecognized"), "Unrecognized switches must be rejected");
+
+            // UNC paths in switches must be rejected to prevent NTLM leaks
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", @"--memory-benchmark=\\attacker\share\bench.json"], out var rUnc1));
+            Assert(rUnc1!.Contains("UNC path rejected"), "Rejection reason must identify UNC path");
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", @"--smoke-test=\\attacker\share\smoke.json"], out var rUnc2));
+            Assert(rUnc2!.Contains("UNC path rejected"), "Rejection reason must identify UNC path");
 
             // Verify security-sensitive WebView2 environment variables are cataloged
             Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"));

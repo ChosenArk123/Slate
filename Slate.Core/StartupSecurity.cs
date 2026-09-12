@@ -132,7 +132,21 @@ public static class StartupSecurity
                 arg.StartsWith("-", StringComparison.Ordinal) ||
                 arg.StartsWith("/", StringComparison.Ordinal))
             {
-                if (IsRecognizedSlateSwitch(arg)) continue;
+                if (IsRecognizedSlateSwitch(arg))
+                {
+                    // Disallow UNC network shares in switch paths to prevent NTLM hash leaks
+                    int equalsIdx = arg.IndexOf('=');
+                    if (equalsIdx >= 0)
+                    {
+                        string pathVal = arg[(equalsIdx + 1)..].Trim('"', '\'');
+                        if (pathVal.StartsWith(@"\\") || pathVal.StartsWith("//"))
+                        {
+                            rejectedReason = $"UNC path rejected in switch for security reasons: {arg}";
+                            return false;
+                        }
+                    }
+                    continue;
+                }
 
                 // Any switch that resembles a browser flag or Chromium parameter is rejected
                 rejectedReason = $"Unrecognized command-line switch rejected: {arg}";

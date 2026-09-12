@@ -37,11 +37,8 @@ public static class HardenedEnvironmentFactory
             // Throttles JavaScript timer wakeups in background/hidden tabs to at most 1 per minute
             "--enable-features=IntensiveWakeUpThrottling,QuickIntensiveWakeUpThrottlingAfterLoading",
 
-            // Explicitly ensures background timer throttling remains active
-            "--disable-background-timer-throttling=false",
-
-            // Allows the OS scheduler to deprioritize hidden renderer processes
-            "--disable-renderer-backgrounding=false",
+            // Background timer throttling and renderer backgrounding are enabled by default in Chromium;
+            // passing '--disable-...=false' would trigger CommandLine::HasSwitch and inadvertently disable them.
 
             // Disables profile synchronization infrastructure not utilized by Slate
             "--disable-sync",

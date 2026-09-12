@@ -40,6 +40,12 @@ public static class MemoryBenchmarkRunner
 {
     public static async Task RunBenchmarkAsync(MainWindow window, string outputPath)
     {
+        if (!DownloadSafety.IsSafeLocalFilePath(outputPath) || File.Exists(outputPath))
+        {
+            Console.Error.WriteLine($"Memory benchmark rejected unsafe or existing output path: {outputPath}");
+            return;
+        }
+
         HttpListener? listener = null;
         try
         {
@@ -328,9 +334,7 @@ public static class MemoryBenchmarkRunner
                 }
             };
 
-            string json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
-            File.WriteAllText(outputPath, json);
+            WriteReportSafely(outputPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
 
             Console.WriteLine("===============================================================================");
             Console.WriteLine("                SLATE GAMING EFFICIENCY MEMORY BENCHMARK");
@@ -349,15 +353,34 @@ public static class MemoryBenchmarkRunner
         }
         catch (Exception ex)
         {
-            var err = new { passed = false, error = ex.ToString() };
-            try { File.WriteAllText(outputPath, JsonSerializer.Serialize(err)); } catch { }
-            Console.Error.WriteLine("Memory benchmark failed: " + ex);
+            var safeError = LogSanitizer.Sanitize(ex.ToString());
+            try { WriteReportSafely(outputPath, JsonSerializer.Serialize(new { passed = false, error = safeError })); } catch { }
+            Console.Error.WriteLine("Memory benchmark failed: " + safeError);
         }
         finally
         {
             try { listener?.Stop(); } catch { }
             Environment.Exit(0);
         }
+    }
+
+    /// <summary>Creates a new report without following an existence check with an overwrite-capable write.</summary>
+    private static void WriteReportSafely(string outputPath, string content)
+    {
+        if (!DownloadSafety.IsSafeLocalFilePath(outputPath))
+            throw new IOException("Unsafe benchmark report path.");
+
+        string directory = Path.GetDirectoryName(outputPath)!;
+        Directory.CreateDirectory(directory);
+        if (!DownloadSafety.IsSafeLocalDirectory(directory))
+            throw new IOException("Benchmark report directory changed while it was being prepared.");
+
+        using var stream = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            4096, FileOptions.WriteThrough);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        writer.Write(content);
+        writer.Flush();
+        stream.Flush(true);
     }
 
     private static ProcessTreeSnapshot CaptureSnapshot(BrowserEngineService engineService)

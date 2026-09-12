@@ -25,9 +25,18 @@ Check("Frames reject file and custom schemes but retain normal web schemes", () 
     Assert(!Navigation.IsAllowedFrameUrl("file:///C:/secret.txt"));
     Assert(!Navigation.IsAllowedFrameUrl("calculator://"));
     Assert(!Navigation.IsAllowedFrameUrl("https:missing-host"));
+    Assert(!Navigation.IsAllowedFrameUrl("javascript:alert(1)"));
     Assert(Navigation.IsAllowedFrameUrl("https://example.com/frame"));
     Assert(Navigation.IsAllowedFrameUrl("blob:https://example.com/id"));
     Assert(Navigation.IsAllowedFrameUrl("about:blank"));
+});
+Check("Automatic password delivery is restricted to HTTPS origins", () =>
+{
+    Assert(Navigation.IsHttpsOrigin("https://accounts.example.com/login"));
+    Assert(!Navigation.IsHttpsOrigin("http://accounts.example.com/login"));
+    Assert(!Navigation.IsHttpsOrigin("http://localhost:3000/login"));
+    Assert(!Navigation.IsHttpsOrigin("http://127.0.0.1:8080/login"));
+    Assert(!Navigation.IsHttpsOrigin("file:///C:/safe.html"));
 });
 Check("Search terms are escaped", () => Assert(Navigation.Search("a&b#c?d", "Bing").EndsWith("a%26b%23c%3Fd")));
 Check("Initial session always has a workspace and active tab", () => { var s = new BrowserSession(); Equal(1, s.State.Workspaces.Count); Equal(s.ActiveTab.WorkspaceId, s.ActiveWorkspace.Id); });
@@ -543,6 +552,19 @@ Check("OmniboxService ranks search, open tabs, and history without duplicates", 
 
     // Blank or whitespace input returns empty suggestions
     Equal(0, OmniboxService.GetSuggestions("  ", session.State.Tabs, session.State.History, "DuckDuckGo").Count);
+});
+
+Check("OmniboxService strictly ignores open InPrivate tabs", () =>
+{
+    var session = new BrowserSession();
+    var normalTab = session.AddTab("https://public.example.com/");
+    normalTab.Title = "Public Page";
+    var privateTab = session.AddTab("https://secret.example.com/", isPrivate: true);
+    privateTab.Title = "Secret InPrivate Page";
+
+    var suggestions = OmniboxService.GetSuggestions("secret", session.State.Tabs, session.State.History, "DuckDuckGo");
+    Assert(!suggestions.Any(s => s.Kind == OmniboxSuggestionKind.OpenTab && s.TabId == privateTab.Id));
+    Assert(!suggestions.Any(s => s.Subtitle.Contains("secret.example.com")));
 });
 
 Check("BrowserCommandRegistry matches Batch B navigation shortcuts", () =>
