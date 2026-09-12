@@ -50,6 +50,8 @@ public sealed class BrowserEngineService
         _environmentTask = null;
     }
 
+    public bool IsHardenedIsolation => _hardenedIsolation;
+
     public void ConfigureHardenedSettings(CoreWebView2Settings settings, bool developerToolsEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -59,7 +61,8 @@ public sealed class BrowserEngineService
         settings.IsWebMessageEnabled = false;
         settings.IsPasswordAutosaveEnabled = false;
         settings.IsGeneralAutofillEnabled = false;
-        settings.AreDevToolsEnabled = developerToolsEnabled;
+        // In hardened isolation mode, developer tools are strictly blocked.
+        settings.AreDevToolsEnabled = developerToolsEnabled && !_hardenedIsolation;
         settings.IsStatusBarEnabled = false;
     }
 

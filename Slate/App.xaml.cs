@@ -18,6 +18,17 @@ public partial class App : Application
         Environment.GetCommandLineArgs().Any(a => a.Equals("--hardened-isolation", StringComparison.OrdinalIgnoreCase) ||
                                                  a.Equals("-hardened-isolation", StringComparison.OrdinalIgnoreCase) ||
                                                  a.Equals("/hardened-isolation", StringComparison.OrdinalIgnoreCase));
+    internal static string? MemoryBenchmarkOutputPath { get; } =
+        Environment.GetCommandLineArgs()
+            .FirstOrDefault(a => a.StartsWith("--memory-benchmark=", StringComparison.OrdinalIgnoreCase) ||
+                                 a.StartsWith("-memory-benchmark=", StringComparison.OrdinalIgnoreCase) ||
+                                 a.StartsWith("/memory-benchmark=", StringComparison.OrdinalIgnoreCase))
+            ?.Split('=', 2)[1]?.Trim('"', '\'') ??
+        (Environment.GetCommandLineArgs().Any(a => a.Equals("--memory-benchmark", StringComparison.OrdinalIgnoreCase) ||
+                                                   a.Equals("-memory-benchmark", StringComparison.OrdinalIgnoreCase) ||
+                                                   a.Equals("/memory-benchmark", StringComparison.OrdinalIgnoreCase))
+            ? Path.Combine(ProfileDirectory, "memory-benchmark.json")
+            : null);
     public App()
     {
         AuditStartupEnvironment();
@@ -36,52 +47,113 @@ public partial class App : Application
 
     private static void AuditStartupEnvironment()
     {
-        // Prevent external environment injection of unsafe browser flags into WebView2
-        Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", null);
-
-        // Disallow dangerous command-line flags that weaken sandboxing or expose debugging ports
-        string[] dangerousFlags =
-        [
-            "remote-debugging-port",
-            "remote-debugging-pipe",
-            "no-sandbox",
-            "disable-web-security",
-            "ignore-certificate-errors",
-            "disable-site-isolation-trials",
-            "single-process"
-        ];
-        var args = Environment.GetCommandLineArgs();
-        foreach (var arg in args)
+        // 1. Scrub external environment variables that could inject unsafe flags, alter executable paths,
+        // or attach debugging pipes to WebView2.
+        foreach (var envVar in StartupSecurity.DangerousWebView2EnvironmentVariables)
         {
-            foreach (var flag in dangerousFlags)
+            try { Environment.SetEnvironmentVariable(envVar, null); } catch { }
+        }
+
+        // 2. Validate all command-line arguments passed to Slate
+        var args = Environment.GetCommandLineArgs();
+        if (!StartupSecurity.ValidateCommandLine(args, out var rejectionReason))
+        {
+            Environment.FailFast(rejectionReason);
+        }
+
+        // 3. Inspect Windows Registry policy overrides to prevent enterprise/group-policy injection of dangerous switches
+        AuditRegistryPolicies();
+
+        // 4. Ensure profile directory has secure permissions
+        EnsureSecureProfileDirectory(ProfileDirectory);
+    }
+
+    private static void AuditRegistryPolicies()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            string[] subKeys =
+            [
+                @"SOFTWARE\Policies\Microsoft\Edge\WebView2",
+                @"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+            ];
+
+            foreach (var root in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
             {
-                if (IsBrowserSwitch(arg, flag))
+                foreach (var subKeyPath in subKeys)
                 {
-                    Environment.FailFast($"Unsafe browser command-line flag rejected: {flag}");
+                    using var key = root.OpenSubKey(subKeyPath);
+                    if (key is null) continue;
+
+                    foreach (var valName in key.GetValueNames())
+                    {
+                        var val = key.GetValue(valName)?.ToString();
+                        if (string.IsNullOrWhiteSpace(val)) continue;
+
+                        // Reject custom runtime binary override policies
+                        if (valName.Equals("browserExecutableFolder", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Environment.FailFast($"Unexpected WebView2 browserExecutableFolder policy detected in registry ({subKeyPath}): {val}");
+                        }
+
+                        // Reject custom profile location overrides that evade Slate's ACL-protected profile
+                        if (valName.Equals("userDataFolder", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Environment.FailFast($"Unexpected WebView2 userDataFolder policy detected in registry ({subKeyPath}): {val}");
+                        }
+
+                        var tokens = val.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        foreach (var token in tokens)
+                        {
+                            if (StartupSecurity.IsDangerousArgument(token))
+                            {
+                                Environment.FailFast($"Dangerous WebView2 policy detected in registry ({subKeyPath}): {token}");
+                            }
+                        }
+                    }
                 }
             }
         }
-    }
-
-    internal static bool IsDangerousBrowserArgument(string? argument)
-    {
-        if (string.IsNullOrEmpty(argument)) return false;
-        foreach (var flag in new[] { "remote-debugging-port", "remote-debugging-pipe", "no-sandbox", "disable-web-security",
-            "ignore-certificate-errors", "disable-site-isolation-trials", "single-process" })
-            if (IsBrowserSwitch(argument, flag)) return true;
-        return false;
-    }
-
-    private static bool IsBrowserSwitch(string argument, string name)
-    {
-        foreach (string prefix in new[] { "--", "-", "/" })
+        catch
         {
-            string value = prefix + name;
-            if (argument.Equals(value, StringComparison.OrdinalIgnoreCase) ||
-                argument.StartsWith(value + "=", StringComparison.OrdinalIgnoreCase)) return true;
         }
-        return false;
     }
+
+    private static void EnsureSecureProfileDirectory(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            Directory.CreateDirectory(path);
+            var dirInfo = new DirectoryInfo(path);
+            var security = dirInfo.GetAccessControl();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+
+            var currentUser = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+            if (currentUser is not null)
+            {
+                security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    currentUser,
+                    System.Security.AccessControl.FileSystemRights.FullControl,
+                    System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit,
+                    System.Security.AccessControl.PropagationFlags.None,
+                    System.Security.AccessControl.AccessControlType.Allow));
+            }
+            var systemSid = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null);
+            security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                systemSid,
+                System.Security.AccessControl.FileSystemRights.FullControl,
+                System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit,
+                System.Security.AccessControl.PropagationFlags.None,
+                System.Security.AccessControl.AccessControlType.Allow));
+
+            dirInfo.SetAccessControl(security);
+        }
+        catch { }
+    }
+
+    internal static bool IsDangerousBrowserArgument(string? argument) => StartupSecurity.IsDangerousArgument(argument);
 
     internal static string SanitizeLogMessage(string? message) => LogSanitizer.Sanitize(message);
     protected override void OnLaunched(LaunchActivatedEventArgs args)

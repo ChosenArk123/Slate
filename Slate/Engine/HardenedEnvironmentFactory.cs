@@ -9,37 +9,62 @@ public static class HardenedEnvironmentFactory
 {
     /// <summary>
     /// Creates a hardened CoreWebView2Environment enforcing strict process isolation,
-    /// complete V8 JIT elimination, aggressive background throttling, and privacy protections.
+    /// aggressive background throttling, and privacy protections without undermining
+    /// Chromium/WebView2 security mechanisms.
     /// </summary>
     public static async Task<CoreWebView2Environment> CreateHardenedEnvironmentAsync(string userDataFolder, bool jitless = false)
     {
         var argsList = new System.Collections.Generic.List<string>
         {
-            // 1. Process Isolation & Hardware Side-Channel Defense
-            "--site-per-process",                        // Enforces physical OS process boundaries per origin (Spectre mitigation)
-            "--disable-shared-workers",                  // Prevents cross-tab state sharing via workers
+            // =========================================================================
+            // Taxonomy: security-critical
+            // =========================================================================
+            // Enforces physical OS process boundaries per origin (out-of-process iframes / Spectre mitigation)
+            "--site-per-process",
 
-            // 3. Gaming Coexistence & Background Throttling
-            "--enable-features=IntensiveWakeUpThrottling,QuickIntensiveWakeUpThrottlingAfterLoading", // Throttles background timers to 1/min
+            // =========================================================================
+            // Taxonomy: privacy-oriented
+            // =========================================================================
+            // Prevents WebRTC from enumerating and leaking private LAN IPv4/IPv6 interfaces to remote sites
+            "--force-webrtc-ip-handling-policy=default_public_interface_only",
+
+            // Restricts cross-tab shared state and background communication channels
+            "--disable-shared-workers",
+
+            // =========================================================================
+            // Taxonomy: gaming-performance-oriented
+            // =========================================================================
+            // Throttles JavaScript timer wakeups in background/hidden tabs to at most 1 per minute
+            "--enable-features=IntensiveWakeUpThrottling,QuickIntensiveWakeUpThrottlingAfterLoading",
+
+            // Explicitly ensures background timer throttling remains active
             "--disable-background-timer-throttling=false",
+
+            // Allows the OS scheduler to deprioritize hidden renderer processes
             "--disable-renderer-backgrounding=false",
 
-            // 4. Background Telemetry & Service Elimination
-            "--disable-background-networking",           // Kills background traffic (telemetry, updates)
-            "--disable-sync",                            // Disables profile synchronization
-            "--disable-breakpad",                        // Disables crash reporting subprocesses
-            "--disable-component-update",                 // Halts background component updates
-            "--disable-domain-reliability",               // Disables network telemetry reporting
+            // Disables profile synchronization infrastructure not utilized by Slate
+            "--disable-sync",
 
-            // 5. Privacy, Network & Fingerprinting Hardening
-            "--force-webrtc-ip-handling-policy=default_public_interface_only", // Prevents private LAN IP leakage via WebRTC
-            "--https-only-mode",                         // Blocks silent HTTP downgrade attacks
-            "--disable-reading-from-canvas"              // Mitigates canvas-based hardware fingerprinting
+            // Disables Chromium's external crash reporting subprocess (Slate handles crash logs locally)
+            "--disable-breakpad",
+
+            // Disables external network health telemetry reporting
+            "--disable-domain-reliability"
+
+            // NOTE ON REMOVED / UNSUPPORTED FLAGS:
+            // 1. '--disable-background-networking' was REMOVED because it disables Chromium Safe Browsing
+            //    updates, CRLSet certificate revocation checks, and captive portal detection.
+            // 2. '--disable-component-update' was REMOVED because it halts emergency CRLSet revocation
+            //    lists and security component updates.
+            // 3. '--https-only-mode' was REMOVED from the command line because WebView2 lacks Chrome's
+            //    native interstitial fallback UI; Slate enforces its own coherent HTTPS-First policy instead.
+            // 4. '--disable-reading-from-canvas' was REMOVED because it is not a valid or supported Chromium switch.
         };
 
-        // 2. V8 Attack Surface Reduction (SDSM / JIT-less Mode)
-        // When enabled, completely disables TurboFan & Maglev JIT compilers (neutralizes ~60% of Chrome 0-days)
-        // When disabled, standard browsing retains native JIT for hardware VP9/AV1 video decoding, Maps, and complex SPAs.
+        // Optional V8 Attack Surface Reduction (JIT-less Mode)
+        // Disables TurboFan and Maglev JIT compilers to eliminate JIT-specific vulnerability classes.
+        // Kept optional because complex SPAs, web games, and video-heavy sites will experience lower JS performance.
         if (jitless)
         {
             argsList.Add("--js-flags=\"--jitless\"");
@@ -56,7 +81,7 @@ public static class HardenedEnvironmentFactory
         };
 
         return await CoreWebView2Environment.CreateWithOptionsAsync(
-            browserExecutableFolder: null, // Resolves installed Edge/WebView2 runtime
+            browserExecutableFolder: null, // Resolves installed Edge/WebView2 Evergreen runtime
             userDataFolder: userDataFolder,
             options: options
         );

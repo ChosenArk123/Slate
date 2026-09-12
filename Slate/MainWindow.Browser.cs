@@ -164,12 +164,57 @@ public sealed partial class MainWindow
         }
     }
 
-    private void ToggleFullScreen(bool? force = null)
+    private void ToggleFullScreen(bool? force = null) => ToggleUserFullScreen(force);
+
+    private void ToggleUserFullScreen(bool? force = null)
     {
-        bool target = force ?? !_isFullScreen;
-        if (_isFullScreen == target) return;
-        _isFullScreen = target;
+        bool target = force ?? !_isUserFullScreen;
+        if (_isUserFullScreen == target) return;
+        _isUserFullScreen = target;
+        ApplyFullScreenLayout();
+    }
+
+    private void HandlePageFullScreenChanged(CoreWebView2 core)
+    {
+        bool target;
+        try { target = core.ContainsFullScreenElement; } catch { return; }
+        if (_isPageFullScreen == target) return;
+        _isPageFullScreen = target;
+
         if (target)
+        {
+            string rawHost = Navigation.DisplayHost(core.Source);
+            string host = BrowserText.SanitizeHost(rawHost);
+            _pageFullscreenText.Text = $"{host} is fullscreen · Esc to exit";
+            _pageFullscreenIndicator.Visibility = Visibility.Visible;
+            _pageFullscreenTimer.Stop();
+            _pageFullscreenTimer.Start();
+        }
+        else
+        {
+            _pageFullscreenTimer.Stop();
+            _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+        }
+
+        ApplyFullScreenLayout();
+    }
+
+    private void ExitPageFullScreen()
+    {
+        _pageFullscreenTimer.Stop();
+        _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+        if (CurrentCore() is { } core)
+        {
+            _ = core.ExecuteScriptAsync("if(document.exitFullscreen) document.exitFullscreen();");
+        }
+        _isPageFullScreen = false;
+        ApplyFullScreenLayout();
+    }
+
+    private void ApplyFullScreenLayout()
+    {
+        bool isAnyFullScreen = _isUserFullScreen || _isPageFullScreen;
+        if (isAnyFullScreen)
         {
             _sidebar.Visibility = Visibility.Collapsed;
             _toolbarSurface.Visibility = Visibility.Collapsed;
@@ -220,6 +265,16 @@ public sealed partial class MainWindow
 
     private void OpenDevTools()
     {
+        if (_engineService.IsHardenedIsolation)
+        {
+            Notify("Developer tools are disabled in Hardened Isolation mode.");
+            return;
+        }
+        if (!_session.State.Settings.DeveloperToolsEnabled)
+        {
+            Notify("Developer tools are disabled. Enable them in Settings.");
+            return;
+        }
         if (CurrentCore() is { } core)
         {
             core.Settings.AreDevToolsEnabled = true;
@@ -229,6 +284,16 @@ public sealed partial class MainWindow
 
     private void StopLoading()
     {
+        if (_isPageFullScreen)
+        {
+            ExitPageFullScreen();
+            return;
+        }
+        if (_isUserFullScreen)
+        {
+            ToggleUserFullScreen(false);
+            return;
+        }
         if (_findBarOpen) { CloseFindBar(); return; }
         if (FocusedTab.IsLoading) CurrentCore()?.Stop();
     }
@@ -243,9 +308,10 @@ public sealed partial class MainWindow
             Notify($"Slate supports up to {BrowserSession.MaximumTabs} open tabs. Close one before opening another.");
             return;
         }
-        _session.AddTab(url, temporary, isPrivate); _focusedTabId = null;
+        string resolvedUrl = url == Navigation.NewTab ? Navigation.NewTab : _navigationCoordinator.ResolveInput(url, _session.State.Settings.SearchEngine);
+        _session.AddTab(resolvedUrl, temporary, isPrivate); _focusedTabId = null;
         await RefreshAsync(); QueueSave();
-        if (url == Navigation.NewTab) FocusAddress();
+        if (resolvedUrl == Navigation.NewTab) FocusAddress();
     }
 
     private async Task ActivateTabAsync(Guid id)
@@ -489,7 +555,7 @@ public sealed partial class MainWindow
         SetWebTheme(core);
         Windows.Foundation.TypedEventHandler<CoreWebView2, object> fullScreenHandler = (_, _) =>
         {
-            DispatcherQueue.TryEnqueue(() => ToggleFullScreen(core.ContainsFullScreenElement));
+            DispatcherQueue.TryEnqueue(() => HandlePageFullScreenChanged(core));
         };
         core.ContainsFullScreenElementChanged += fullScreenHandler;
 
@@ -546,6 +612,25 @@ public sealed partial class MainWindow
             {
                 args.Cancel = true; Notify("Slate only opens HTTP, HTTPS, and safe local files. External app links are blocked."); return;
             }
+
+            // Block silent HTTPS downgrade attempts
+            if (_navigationCoordinator.IsDowngradeAttempt(core.Source, args.Uri))
+            {
+                args.Cancel = true;
+                Notify("Slate blocked an insecure HTTP downgrade attempt.");
+                return;
+            }
+
+            // Warn on unencrypted public HTTP navigation
+            if (Navigation.IsPublicHttp(args.Uri))
+            {
+                string host = Navigation.DisplayHost(args.Uri);
+                if (!_navigationCoordinator.IsInsecureHttpAllowed(host))
+                {
+                    Notify($"Warning: {BrowserText.SanitizeHost(host)} is not secure (HTTP). Traffic is unencrypted.");
+                }
+            }
+
             tab.IsLoading = true; runtime.Error = null; runtime.SecureNavigation = false; runtime.CertificateError = false;
             runtime.FaviconImage = null; runtime.FaviconRevision++; tab.Favicon = null;
             UpdateChrome(); RenderSidebar();
@@ -635,6 +720,10 @@ public sealed partial class MainWindow
             var origin = Navigation.WebOrigin(core.Source) ?? "unknown";
             if (!args.IsUserInitiated) Notify("Slate blocked a popup that was not opened by you.");
             else if (!AllowPopup(origin, DateTimeOffset.UtcNow)) Notify("Slate blocked repeated popups from this site.");
+            else if (_navigationCoordinator.IsDowngradeAttempt(core.Source, args.Uri))
+            {
+                Notify("Slate blocked an insecure HTTP popup downgrade.");
+            }
             else if (Navigation.IsWebUrl(args.Uri) || args.Uri == "about:blank") await RunAsync(() => NewTabAsync(args.Uri, tab.IsTemporary, tab.IsPrivate));
             else Notify("This popup uses an unsupported address.");
         };
@@ -648,6 +737,7 @@ public sealed partial class MainWindow
             var deferral = args.GetDeferral();
             args.State = CoreWebView2PermissionState.Deny;
             args.SavesInProfile = false;
+            runtime.HasActivePermissionPrompt = true;
             try
             {
                 if (!IsLive(tab, runtime) || runtime.CertificateError) return;
@@ -679,7 +769,11 @@ public sealed partial class MainWindow
                 }
             }
             catch (Exception ex) { Notify("Permission request dismissed: " + ex.Message); }
-            finally { deferral.Complete(); }
+            finally
+            {
+                runtime.HasActivePermissionPrompt = false;
+                deferral.Complete();
+            }
         };
         core.PermissionRequested += permissionHandler;
 
@@ -804,6 +898,10 @@ public sealed partial class MainWindow
                     {
                         DownloadSafety.TryDeleteIncompleteFile(safePath);
                         download.Path = "";
+                    }
+                    else
+                    {
+                        DownloadSafety.AttachZoneIdentifier(safePath, tab.Url);
                     }
                     op.BytesReceivedChanged -= Changed; op.StateChanged -= Changed;
                     _downloadOperations.Remove(download.Id); runtime.Downloads.Remove(download.Id);
@@ -1250,15 +1348,7 @@ public sealed partial class MainWindow
         foreach (var tab in _session.State.Tabs.Where(t => t.LastAccessed < threshold && !t.IsSleeping).ToList()) _ = SleepTabAsync(tab.Id);
     }
 
-    private void DisposeRuntime(Guid id)
-    {
-        if (!_runtimes.Remove(id, out var runtime)) return;
-        _commandRouter.DetachWebView2(runtime.View);
-        runtime.Teardown?.Invoke();
-        runtime.Teardown = null;
-        if (runtime.View.Parent is Panel parent) parent.Children.Remove(runtime.View);
-        runtime.View.Close();
-    }
+    private void DisposeRuntime(Guid id) => _tabManager.DisposeRuntime(id);
 
     private async Task SavePageAsync()
     {
@@ -1418,15 +1508,60 @@ public sealed partial class MainWindow
             }
             else if (Navigation.IsWebUrl(targetUrl))
             {
-                var existingTab = _session.State.Tabs.FirstOrDefault(t => t.Id != tab.Id && t.Url == targetUrl);
+                var existingTab = _session.State.Tabs.FirstOrDefault(t => t.Id != tab.Id &&
+                    (string.Equals(t.Url, targetUrl, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(t.Url.TrimEnd('/'), targetUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)));
+
                 if (existingTab is not null && _runtimes.TryGetValue(existingTab.Id, out var existingRuntime) && existingRuntime.View.CoreWebView2 is { } existingCore)
                 {
-                    var raw = await existingCore.ExecuteScriptAsync($"document.documentElement.outerHTML.slice(0,{MaximumViewSourceCharacters + 1})");
-                    sourceContent = "<!DOCTYPE html>\n" + BoundViewSource(System.Text.Json.JsonSerializer.Deserialize<string>(raw) ?? "");
+                    string? retrievedSource = null;
+                    try
+                    {
+                        var treeJson = await existingCore.CallDevToolsProtocolMethodAsync("Page.getResourceTree", "{}");
+                        using var treeDoc = System.Text.Json.JsonDocument.Parse(treeJson);
+                        if (treeDoc.RootElement.TryGetProperty("frameTree", out var ft) &&
+                            ft.TryGetProperty("frame", out var frm) &&
+                            frm.TryGetProperty("id", out var idProp))
+                        {
+                            var frameId = idProp.GetString();
+                            if (!string.IsNullOrEmpty(frameId))
+                            {
+                                var paramsJson = System.Text.Json.JsonSerializer.Serialize(new { frameId = frameId, url = targetUrl });
+                                var contentJson = await existingCore.CallDevToolsProtocolMethodAsync("Page.getResourceContent", paramsJson);
+                                using var contentDoc = System.Text.Json.JsonDocument.Parse(contentJson);
+                                if (contentDoc.RootElement.TryGetProperty("content", out var contentProp))
+                                {
+                                    retrievedSource = contentProp.GetString();
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // CDP extraction failed or unsupported; fall back to live DOM extraction
+                    }
+
+                    if (!string.IsNullOrEmpty(retrievedSource))
+                    {
+                        sourceContent = BoundViewSource(retrievedSource);
+                    }
+                    else
+                    {
+                        var raw = await existingCore.ExecuteScriptAsync($"document.documentElement.outerHTML.slice(0,{MaximumViewSourceCharacters + 1})");
+                        sourceContent = "<!DOCTYPE html>\n" + BoundViewSource(System.Text.Json.JsonSerializer.Deserialize<string>(raw) ?? "");
+                    }
                 }
                 else
                 {
-                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                    // No live browsing context exists for this target.
+                    // Fall back to a strictly constrained, size-bounded fetch using standard browser headers.
+                    using var handler = new HttpClientHandler
+                    {
+                        CheckCertificateRevocationList = true,
+                        AutomaticDecompression = DecompressionMethods.All
+                    };
+                    using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(core.Settings.UserAgent.Length > 0 ? core.Settings.UserAgent : "Mozilla/5.0 Slate/1.0");
                     using var response = await client.GetAsync(targetUrl, HttpCompletionOption.ResponseHeadersRead);
                     response.EnsureSuccessStatusCode();
                     await using var stream = await response.Content.ReadAsStreamAsync();

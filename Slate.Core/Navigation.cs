@@ -23,13 +23,23 @@ public static class Navigation
             if (Uri.TryCreate(text, UriKind.Absolute, out var explicitUri) &&
                 explicitUri.Scheme is "http" or "https" && !string.IsNullOrEmpty(explicitUri.Host) &&
                 string.IsNullOrEmpty(explicitUri.UserInfo) && !text.Contains('\\'))
+            {
+                // HTTPS-First: Upgrade public HTTP requests to HTTPS.
+                // Local development endpoints (localhost, loopback IP) remain HTTP.
+                if (explicitUri.Scheme == "http" && !IsLoopbackOrLocalHost(explicitUri.Host))
+                {
+                    var builder = new UriBuilder(explicitUri) { Scheme = "https" };
+                    if (explicitUri.IsDefaultPort) builder.Port = -1;
+                    return builder.Uri.AbsoluteUri;
+                }
                 return explicitUri.AbsoluteUri;
+            }
             var candidate = "https://" + text;
             if (!text.Contains("://") && !text.Contains('\\') && Uri.TryCreate(candidate, UriKind.Absolute, out var uri) &&
                 (uri.Host.Contains('.') || uri.Host == "localhost" || IPAddress.TryParse(uri.Host.Trim('[', ']'), out _)) &&
                 string.IsNullOrEmpty(uri.UserInfo))
             {
-                bool loopback = uri.Host == "localhost" || (IPAddress.TryParse(uri.Host.Trim('[', ']'), out var address) && IPAddress.IsLoopback(address));
+                bool loopback = IsLoopbackOrLocalHost(uri.Host);
                 return loopback ? new Uri("http://" + text).AbsoluteUri : uri.AbsoluteUri;
             }
         }
@@ -55,6 +65,34 @@ public static class Navigation
         return uri.Scheme is "data" or "blob" or "javascript";
     }
 
+    public static bool IsLoopbackOrLocalHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return false;
+        string cleaned = host.Trim().Trim('[', ']');
+        if (cleaned.EndsWith('.')) cleaned = cleaned.TrimEnd('.');
+        if (cleaned.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
+        if (cleaned.Length > ".localhost".Length && cleaned.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)) return true;
+        if (IPAddress.TryParse(cleaned, out var ip))
+        {
+            return IPAddress.IsLoopback(ip);
+        }
+        return false;
+    }
+
+    public static bool IsLoopbackOrLocalUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+        return IsLoopbackOrLocalHost(uri.Host);
+    }
+
+    public static bool IsPublicHttp(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+        return uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) && !IsLoopbackOrLocalHost(uri.Host);
+    }
+
     public static bool IsSecureOrigin(string? origin)
     {
         if (string.IsNullOrWhiteSpace(origin) || !Uri.TryCreate(origin, UriKind.Absolute, out var uri))
@@ -63,8 +101,7 @@ public static class Navigation
             return true;
         if (uri.Scheme == Uri.UriSchemeHttp)
         {
-            string host = uri.Host.Trim('[', ']');
-            return host == "localhost" || (IPAddress.TryParse(host, out var ip) && IPAddress.IsLoopback(ip));
+            return IsLoopbackOrLocalHost(uri.Host);
         }
         return false;
     }
@@ -102,11 +139,22 @@ public static class Navigation
     {
         if (string.IsNullOrEmpty(extension)) return false;
         var ext = extension.Trim().TrimEnd('.', ' ').TrimStart('.').ToLowerInvariant();
-        return ext is "app" or "application" or "appinstaller" or "appref-ms" or "bat" or "cmd" or "com" or
-            "cpl" or "diagcab" or "dll" or "exe" or "gadget" or "hta" or "inf" or "ins" or "iso" or "isp" or
-            "jar" or "jnlp" or "js" or "jse" or "lnk" or "msc" or "msi" or "msp" or "mst" or "ocx" or "pif" or
-            "ps1" or "ps1xml" or "ps2" or "ps2xml" or "psc1" or "psc2" or "reg" or "scf" or "scr" or "sct" or
-            "shb" or "sys" or "url" or "vb" or "vbe" or "vbs" or "ws" or "wsc" or "wsf" or "wsh";
+        return ext is
+            // Executable binaries & installers
+            "app" or "application" or "appinstaller" or "appref-ms" or "appx" or "appxbundle" or
+            "bat" or "cmd" or "com" or "cpl" or "diagcab" or "dll" or "exe" or "gadget" or "hta" or
+            "inf" or "ins" or "iso" or "isp" or "jar" or "jnlp" or "js" or "jse" or "lnk" or "msc" or
+            "msi" or "msix" or "msixbundle" or "msp" or "mst" or "ocx" or "pif" or
+            // Scripts & configuration vectors
+            "ps1" or "ps1xml" or "ps2" or "ps2xml" or "psc1" or "psc2" or "reg" or "scf" or "scr" or
+            "sct" or "shb" or "sys" or "url" or "vb" or "vbe" or "vbs" or "ws" or "wsc" or "wsf" or "wsh" or
+            // Modern Windows packages, shortcuts, containers, disk images, sandbox configs, and help files
+            "vhd" or "vhdx" or "img" or "settingcontent-ms" or "search-ms" or "desklink" or "mapimail" or
+            "theme" or "themepack" or "chm" or "wsb" or
+            // Certificates & keystores
+            "cer" or "crt" or "der" or "pfx" or "p12" or
+            // Web queries
+            "iqy" or "rqy";
     }
 
     public static bool IsViewSourceUrl(string? url)

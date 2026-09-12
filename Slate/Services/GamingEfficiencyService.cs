@@ -82,6 +82,15 @@ public sealed class GamingEfficiencyService : IDisposable
     private const uint PROCESS_SET_INFORMATION = 0x0200;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateMemoryResourceNotification(int notificationType);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryMemoryResourceNotification(IntPtr resourceNotificationHandle, [MarshalAs(UnmanagedType.Bool)] out bool resourceState);
+
+    private const int LowMemoryResourceNotification = 0;
+
     #endregion
 
     private readonly IntPtr _slateWindowHandle;
@@ -92,10 +101,12 @@ public sealed class GamingEfficiencyService : IDisposable
     private readonly Func<IReadOnlyList<CoreWebView2ProcessInfo>?> _processInfosProvider;
     private readonly WinEventDelegate _winEventDelegate;
     private IntPtr _hookHandle;
+    private IntPtr _lowMemoryHandle;
     private bool _isGamingModeActive;
     private bool _disposed;
 
     public event Action<bool>? GamingModeChanged;
+    public event Action? InactiveTabDiscardRequested;
 
     public GamingEfficiencyService(
         IntPtr slateWindowHandle,
@@ -110,6 +121,12 @@ public sealed class GamingEfficiencyService : IDisposable
         _activeViewsProvider = activeViewsProvider;
         _focusedViewProvider = focusedViewProvider;
         _processInfosProvider = processInfosProvider;
+
+        try
+        {
+            _lowMemoryHandle = CreateMemoryResourceNotification(LowMemoryResourceNotification);
+        }
+        catch { }
 
         _winEventDelegate = OnForegroundWindowChanged;
         _hookHandle = SetWinEventHook(
@@ -203,7 +220,10 @@ public sealed class GamingEfficiencyService : IDisposable
             catch { /* View may be navigating or closing */ }
         }
 
-        // 3. Purge Physical Working Set from RAM for Slate and its own child processes
+        // 3. Signal tab manager to discard older inactive background tab runtimes
+        InactiveTabDiscardRequested?.Invoke();
+
+        // 4. Purge Physical Working Set from RAM for Slate and its own child processes
         TrimWorkingSet();
     }
 
@@ -283,7 +303,7 @@ public sealed class GamingEfficiencyService : IDisposable
         SetProcessInformation(hProcess, ProcessPowerThrottling, ref throttling, (uint)Marshal.SizeOf<PROCESS_POWER_THROTTLING_STATE>());
     }
 
-    private void TrimWorkingSet()
+    public void TrimWorkingSet()
     {
         try
         {
@@ -313,6 +333,20 @@ public sealed class GamingEfficiencyService : IDisposable
         catch { }
     }
 
+    public void CheckMemoryPressure()
+    {
+        if (_disposed || _lowMemoryHandle == IntPtr.Zero) return;
+        try
+        {
+            if (QueryMemoryResourceNotification(_lowMemoryHandle, out bool isLowMemory) && isLowMemory)
+            {
+                InactiveTabDiscardRequested?.Invoke();
+                TrimWorkingSet();
+            }
+        }
+        catch { }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -322,6 +356,12 @@ public sealed class GamingEfficiencyService : IDisposable
         {
             UnhookWinEvent(_hookHandle);
             _hookHandle = IntPtr.Zero;
+        }
+
+        if (_lowMemoryHandle != IntPtr.Zero)
+        {
+            CloseHandle(_lowMemoryHandle);
+            _lowMemoryHandle = IntPtr.Zero;
         }
 
         if (_isGamingModeActive)

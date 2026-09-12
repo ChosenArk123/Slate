@@ -228,5 +228,201 @@ public static class LifecycleTests
             Assert(session.State.RecentlyClosed.Count <= 30, "RecentlyClosed must be clamped to 30");
             Equal("https://close-29.example/", session.State.RecentlyClosed[0].Url);
         });
+
+        // -----------------------------------------------------------------
+        // 4. Tab Discard / Restore Lifecycle & State Survival Audit
+        // -----------------------------------------------------------------
+        check("Lifecycle: Discard and restore lifecycle cycles preserve tab metadata and update sleep state correctly", () =>
+        {
+            var session = new BrowserSession();
+            var tab = session.AddTab("https://docs.example.com/api");
+            tab.Title = "API Reference";
+            tab.Favicon = "https://docs.example.com/favicon.png";
+            tab.IsPinned = true;
+            tab.LastAccessed = DateTimeOffset.UtcNow.AddMinutes(-5);
+
+            // Cycle 1: Discard
+            tab.IsSleeping = true;
+            Assert(tab.IsSleeping, "Tab must be marked sleeping upon discard");
+            Equal("https://docs.example.com/api", tab.Url);
+            Equal("API Reference", tab.Title);
+            Equal("https://docs.example.com/favicon.png", tab.Favicon);
+            Assert(tab.IsPinned, "Pinned state must survive discard");
+
+            // Cycle 1: Restore (Activation)
+            session.Activate(tab.Id);
+            tab.IsSleeping = false;
+            tab.LastAccessed = DateTimeOffset.UtcNow;
+            Assert(!tab.IsSleeping, "Tab must be awake after restore/activation");
+            Equal(session.ActiveTab.Id, tab.Id);
+
+            // Cycle 2: Discard again
+            tab.IsSleeping = true;
+            Assert(tab.IsSleeping, "Tab must be marked sleeping after second discard");
+            Equal("https://docs.example.com/api", tab.Url);
+            Equal("API Reference", tab.Title);
+
+            // Cycle 2: Restore again
+            tab.IsSleeping = false;
+            Assert(!tab.IsSleeping, "Tab must be awake after second restore");
+            Equal("https://docs.example.com/api", tab.Url);
+        });
+
+        check("Lifecycle: Tab state survival audit verifies persisted properties and non-persistence of ephemeral state", () =>
+        {
+            var session = new BrowserSession();
+            var tab = session.AddTab("https://portal.example.com/dashboard");
+            tab.Title = "Dashboard Overview";
+            tab.Favicon = "https://portal.example.com/icon.png";
+            tab.IsPinned = true;
+            tab.IsLoading = true;
+
+            // Discard tab: IsLoading resets, IsSleeping becomes true
+            tab.IsSleeping = true;
+            tab.IsLoading = false;
+
+            // Verify metadata survives
+            Equal("https://portal.example.com/dashboard", tab.Url);
+            Equal("Dashboard Overview", tab.Title);
+            Equal("https://portal.example.com/icon.png", tab.Favicon);
+            Assert(tab.IsPinned, "Pinned state must survive");
+            Assert(tab.IsSleeping, "Sleep state must be set");
+            Assert(!tab.IsLoading, "Ephemeral loading state must be cleared");
+
+            // Verify private tab in-memory survival
+            var privTab = session.AddTab("https://secure.example.com/login", isPrivate: true);
+            privTab.Title = "Secure Login";
+            privTab.IsSleeping = true;
+            Assert(privTab.IsPrivate, "Private flag must survive discard in memory");
+            Equal("Secure Login", privTab.Title);
+
+            // Verify session normalization excludes private tab while preserving regular tab
+            var reloaded = new BrowserSession(session.State);
+            Assert(reloaded.State.Tabs.Any(t => t.Title == "Dashboard Overview"), "Regular tab must be preserved");
+            Assert(!reloaded.State.Tabs.Any(t => t.Title == "Secure Login"), "Private tab must never be restored in session");
+        });
+
+        check("Lifecycle: TabLifecyclePolicy prioritizes Least Recently Used (LRU) tabs for discard", () =>
+        {
+            var tabA = Guid.NewGuid();
+            var tabB = Guid.NewGuid();
+            var tabC = Guid.NewGuid();
+            var tabD = Guid.NewGuid();
+            var tabE = Guid.NewGuid();
+
+            var now = DateTimeOffset.UtcNow;
+            var accessTimes = new Dictionary<Guid, DateTimeOffset>
+            {
+                [tabA] = now.AddMinutes(-10), // Oldest
+                [tabB] = now.AddMinutes(-8),
+                [tabC] = now.AddMinutes(-6),
+                [tabD] = now.AddMinutes(-4),
+                [tabE] = now.AddMinutes(-2),  // Newest background
+            };
+
+            var allTabs = new[] { tabA, tabB, tabC, tabD, tabE };
+
+            // When maxRetainedBackgroundViews = 2, 3 of 5 should be discarded in LRU order: A, then B, then C
+            var discarded = TabLifecyclePolicy.SelectDiscardCandidates(
+                allTabs,
+                isProtected: _ => false,
+                hasActivePermissionPrompt: _ => false,
+                hasActiveDownloads: _ => false,
+                isPlayingAudio: _ => false,
+                isLoading: _ => false,
+                getLastAccessed: id => accessTimes[id],
+                minInactiveDuration: TimeSpan.FromSeconds(30),
+                maxRetainedBackgroundViews: 2,
+                now: now);
+
+            Equal(3, discarded.Count);
+            Equal(tabA, discarded[0]);
+            Equal(tabB, discarded[1]);
+            Equal(tabC, discarded[2]);
+        });
+
+        check("Lifecycle: TabLifecyclePolicy protects active, split, audio, download, permission prompt, and loading tabs", () =>
+        {
+            var protectedTab = Guid.NewGuid();
+            var promptTab = Guid.NewGuid();
+            var downloadTab = Guid.NewGuid();
+            var audioTab = Guid.NewGuid();
+            var loadingTab = Guid.NewGuid();
+            var eligibleOldTab = Guid.NewGuid();
+            var eligibleNewTab = Guid.NewGuid();
+
+            var now = DateTimeOffset.UtcNow;
+            var accessTimes = new Dictionary<Guid, DateTimeOffset>
+            {
+                [protectedTab] = now.AddMinutes(-20),
+                [promptTab] = now.AddMinutes(-19),
+                [downloadTab] = now.AddMinutes(-18),
+                [audioTab] = now.AddMinutes(-17),
+                [loadingTab] = now.AddMinutes(-16),
+                [eligibleOldTab] = now.AddMinutes(-15),
+                [eligibleNewTab] = now.AddMinutes(-10),
+            };
+
+            var allTabs = new[] { protectedTab, promptTab, downloadTab, audioTab, loadingTab, eligibleOldTab, eligibleNewTab };
+
+            var discarded = TabLifecyclePolicy.SelectDiscardCandidates(
+                allTabs,
+                isProtected: id => id == protectedTab,
+                hasActivePermissionPrompt: id => id == promptTab,
+                hasActiveDownloads: id => id == downloadTab,
+                isPlayingAudio: id => id == audioTab,
+                isLoading: id => id == loadingTab,
+                getLastAccessed: id => accessTimes[id],
+                minInactiveDuration: TimeSpan.FromSeconds(30),
+                maxRetainedBackgroundViews: 0,
+                now: now);
+
+            // Only eligible tabs should be discarded, ordered by LRU
+            Equal(2, discarded.Count);
+            Equal(eligibleOldTab, discarded[0]);
+            Equal(eligibleNewTab, discarded[1]);
+            Assert(!discarded.Contains(protectedTab), "Protected active/split tab must not be discarded");
+            Assert(!discarded.Contains(promptTab), "Tab with active permission prompt must not be discarded");
+            Assert(!discarded.Contains(downloadTab), "Tab with active download must not be discarded");
+            Assert(!discarded.Contains(audioTab), "Tab playing audio must not be discarded");
+            Assert(!discarded.Contains(loadingTab), "Tab currently loading must not be discarded");
+        });
+
+        check("Lifecycle: TabLifecyclePolicy respects recency threshold (< 30s) and retains recently used tabs", () =>
+        {
+            var veryRecentTab = Guid.NewGuid();   // 15 seconds ago (< 30s)
+            var borderlineTab = Guid.NewGuid();   // 29 seconds ago (< 30s)
+            var eligibleTab1 = Guid.NewGuid();    // 35 seconds ago (>= 30s)
+            var eligibleTab2 = Guid.NewGuid();    // 120 seconds ago (>= 30s)
+
+            var now = DateTimeOffset.UtcNow;
+            var accessTimes = new Dictionary<Guid, DateTimeOffset>
+            {
+                [veryRecentTab] = now.AddSeconds(-15),
+                [borderlineTab] = now.AddSeconds(-29),
+                [eligibleTab1] = now.AddSeconds(-35),
+                [eligibleTab2] = now.AddSeconds(-120),
+            };
+
+            var allTabs = new[] { veryRecentTab, borderlineTab, eligibleTab1, eligibleTab2 };
+
+            var discarded = TabLifecyclePolicy.SelectDiscardCandidates(
+                allTabs,
+                isProtected: _ => false,
+                hasActivePermissionPrompt: _ => false,
+                hasActiveDownloads: _ => false,
+                isPlayingAudio: _ => false,
+                isLoading: _ => false,
+                getLastAccessed: id => accessTimes[id],
+                minInactiveDuration: TimeSpan.FromSeconds(30),
+                maxRetainedBackgroundViews: 0,
+                now: now);
+
+            Equal(2, discarded.Count);
+            Equal(eligibleTab2, discarded[0]); // 120s ago is older than 35s ago
+            Equal(eligibleTab1, discarded[1]);
+            Assert(!discarded.Contains(veryRecentTab), "Tab accessed 15s ago must be protected by recency threshold");
+            Assert(!discarded.Contains(borderlineTab), "Tab accessed 29s ago must be protected by recency threshold");
+        });
     }
 }

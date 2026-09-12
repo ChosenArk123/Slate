@@ -12,6 +12,31 @@ public sealed class NavigationCoordinator
         return Navigation.Resolve(input, searchEngine);
     }
 
+    private readonly HashSet<string> _allowedInsecureHosts = new(StringComparer.OrdinalIgnoreCase);
+
+    public bool IsInsecureHttpAllowed(string host) => _allowedInsecureHosts.Contains(host);
+
+    public void AllowInsecureHttp(string host) => _allowedInsecureHosts.Add(host);
+
+    /// <summary>
+    /// Detects attempts to silently downgrade an active secure HTTPS navigation to unencrypted public HTTP.
+    /// </summary>
+    public bool IsDowngradeAttempt(string? currentUrl, string targetUrl)
+    {
+        if (string.IsNullOrWhiteSpace(currentUrl) || string.IsNullOrWhiteSpace(targetUrl)) return false;
+        if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var currentUri) ||
+            !Uri.TryCreate(targetUrl, UriKind.Absolute, out var targetUri)) return false;
+
+        // Only flag if moving from HTTPS to public HTTP
+        if (currentUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+            targetUri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+        {
+            return !Navigation.IsLoopbackOrLocalHost(targetUri.Host);
+        }
+
+        return false;
+    }
+
     public bool IsSafeToNavigate(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return false;

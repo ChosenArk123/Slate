@@ -63,7 +63,11 @@ public sealed partial class MainWindow : Window
     private readonly Button _zoomBadge = new();
     private Button _findPrev = null!, _findNext = null!, _findClose = null!;
     private bool _findBarOpen;
-    private bool _isFullScreen;
+    private bool _isUserFullScreen;
+    private bool _isPageFullScreen;
+    private readonly Border _pageFullscreenIndicator = new();
+    private readonly TextBlock _pageFullscreenText = new();
+    private readonly DispatcherTimer _pageFullscreenTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
     private Button _bookmarkButton = null!;
     private Button _downloadsButton = null!;
     private readonly ScrollViewer _bookmarksBar = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, Height = 32, Visibility = Visibility.Collapsed };
@@ -96,12 +100,22 @@ public sealed partial class MainWindow : Window
         bool hardenedIsolation = App.HasHardenedIsolationArg || _session.State.Settings.HardenedIsolation;
         _engineService = new BrowserEngineService(App.ProfileDirectory, hardenedIsolation);
         _tabManager.FocusedTabIdProvider = () => _focusedTabId;
+        _tabManager.OnRuntimeDisposing = runtime => _commandRouter?.DetachWebView2(runtime.View);
         _gamingEfficiencyService = new GamingEfficiencyService(
             WinRT.Interop.WindowNative.GetWindowHandle(this),
             DispatcherQueue,
             () => _tabManager.GetActiveCoreViews(),
             () => _tabManager.GetFocusedCoreView(),
             () => _engineService.GetProcessInfos());
+        _gamingEfficiencyService.InactiveTabDiscardRequested += () =>
+        {
+            DispatcherQueue.TryEnqueue(DiscardInactiveBackgroundTabs);
+        };
+        _pageFullscreenTimer.Tick += (_, _) =>
+        {
+            _pageFullscreenTimer.Stop();
+            _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+        };
         BuildShell();
         Content = _root;
         SystemBackdrop = new MicaBackdrop();
@@ -113,12 +127,16 @@ public sealed partial class MainWindow : Window
         _commandRouter.CanExecuteFilter = cmd =>
         {
             if (cmd == BrowserCommand.StopLoading)
-                return _findBarOpen || FocusedTab.IsLoading;
+                return _isPageFullScreen || _isUserFullScreen || _findBarOpen || FocusedTab.IsLoading;
             return true;
         };
         AddShortcuts();
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); Save(); };
-        _sleepTimer.Tick += (_, _) => SleepIdleTabs();
+        _sleepTimer.Tick += (_, _) =>
+        {
+            SleepIdleTabs();
+            _gamingEfficiencyService.CheckMemoryPressure();
+        };
         _sleepTimer.Start();
         _root.Loaded += async (_, _) =>
         {
@@ -126,6 +144,13 @@ public sealed partial class MainWindow : Window
             _ready = true;
             await RefreshAsync();
             if (_store.LastError is { } error) Notify(error);
+            if (App.MemoryBenchmarkOutputPath is { } benchmarkPath)
+            {
+                _ = DispatcherQueue.TryEnqueue(async () =>
+                {
+                    await MemoryBenchmarkRunner.RunBenchmarkAsync(this, benchmarkPath);
+                });
+            }
         };
         AppWindow.Closing += (_, _) => Shutdown();
         Closed += (_, _) => Shutdown();
@@ -323,6 +348,20 @@ public sealed partial class MainWindow : Window
         _suggestionsPopup.Child = _suggestionsBorder;
         _suggestionsPopup.IsLightDismissEnabled = false;
         _root.Children.Add(_suggestionsPopup);
+
+        _pageFullscreenIndicator.CornerRadius = new(SlateTheme.RadiusMedium);
+        _pageFullscreenIndicator.BorderThickness = new(1);
+        _pageFullscreenIndicator.Padding = new(16, 8, 16, 8);
+        _pageFullscreenIndicator.HorizontalAlignment = HorizontalAlignment.Center;
+        _pageFullscreenIndicator.VerticalAlignment = VerticalAlignment.Top;
+        _pageFullscreenIndicator.Margin = new(0, 16, 0, 0);
+        _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+        _pageFullscreenIndicator.Child = _pageFullscreenText;
+        _pageFullscreenText.FontSize = 13;
+        _pageFullscreenText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+        Grid.SetRowSpan(_pageFullscreenIndicator, 2);
+        _root.Children.Add(_pageFullscreenIndicator);
+
         _bookmarksBar.Content = _bookmarksList;
         var toolbarContainer = new StackPanel { Spacing = 2 };
         toolbarContainer.Children.Add(toolbar);
@@ -456,6 +495,9 @@ public sealed partial class MainWindow : Window
         _zoomBadge.BorderBrush = _theme.DividerBrush;
         _suggestionsBorder.Background = _theme.SurfaceRaisedBrush;
         _suggestionsBorder.BorderBrush = _theme.DividerBrush;
+        _pageFullscreenIndicator.Background = _theme.SurfaceRaisedBrush;
+        _pageFullscreenIndicator.BorderBrush = _theme.DividerBrush;
+        _pageFullscreenText.Foreground = _theme.TextPrimaryBrush;
         UpdateDownloadIndicator();
         UpdateBookmarkIndicator();
         RenderBookmarksBar();
@@ -1192,6 +1234,73 @@ public sealed partial class MainWindow : Window
             btn.ContextFlyout = menu;
             _bookmarksList.Children.Add(btn);
         }
+    }
+
+    private void DiscardInactiveBackgroundTabs()
+    {
+        var preserve = new HashSet<Guid> { _session.ActiveTab.Id };
+        if (_splitTabId.HasValue) preserve.Add(_splitTabId.Value);
+        if (_focusedTabId.HasValue) preserve.Add(_focusedTabId.Value);
+
+        var discarded = _tabManager.DiscardInactiveRuntimes(
+            preserve,
+            maxRetainedBackgroundViews: 1,
+            lastAccessedProvider: id => _session.State.Tabs.FirstOrDefault(t => t.Id == id)?.LastAccessed,
+            isLoadingProvider: id => _session.State.Tabs.FirstOrDefault(t => t.Id == id)?.IsLoading == true,
+            minInactiveDuration: TimeSpan.FromSeconds(30));
+
+        if (discarded.Count > 0)
+        {
+            foreach (var id in discarded)
+            {
+                var tab = _session.State.Tabs.FirstOrDefault(t => t.Id == id);
+                if (tab is not null) tab.IsSleeping = true;
+            }
+            RenderSidebar();
+            QueueSave();
+
+            // Collect dereferenced runtime wrappers and purge Windows working set
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            _gamingEfficiencyService?.TrimWorkingSet();
+        }
+    }
+
+    internal BrowserSession Session => _session;
+    internal TabManagerService TabManager => _tabManager;
+    internal BrowserEngineService EngineService => _engineService;
+    internal GamingEfficiencyService GamingEfficiency => _gamingEfficiencyService;
+    internal Task BenchmarkNewTabAsync(string url) => NewTabAsync(url);
+    internal Task BenchmarkActivateTabAsync(Guid id) => ActivateTabAsync(id);
+    internal List<Guid> BenchmarkDiscardTabs(TimeSpan minInactiveDuration, int maxRetained = 1)
+    {
+        var preserve = new HashSet<Guid> { _session.ActiveTab.Id };
+        if (_splitTabId.HasValue) preserve.Add(_splitTabId.Value);
+        if (_focusedTabId.HasValue) preserve.Add(_focusedTabId.Value);
+
+        var discarded = _tabManager.DiscardInactiveRuntimes(
+            preserve,
+            maxRetainedBackgroundViews: maxRetained,
+            lastAccessedProvider: id => _session.State.Tabs.FirstOrDefault(t => t.Id == id)?.LastAccessed,
+            isLoadingProvider: id => _session.State.Tabs.FirstOrDefault(t => t.Id == id)?.IsLoading == true,
+            minInactiveDuration: minInactiveDuration);
+
+        if (discarded.Count > 0)
+        {
+            foreach (var id in discarded)
+            {
+                var tab = _session.State.Tabs.FirstOrDefault(t => t.Id == id);
+                if (tab is not null) tab.IsSleeping = true;
+            }
+            RenderSidebar();
+            QueueSave();
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            _gamingEfficiencyService?.TrimWorkingSet();
+        }
+
+        return discarded;
     }
 
     private void Shutdown()

@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
+using Slate.Core;
 
 namespace Slate.Services;
 
@@ -23,6 +24,7 @@ public sealed class TabRuntime(WebView2 view)
     public BitmapImage? FaviconImage { get; set; }
     public long FaviconRevision { get; set; }
     public HashSet<Guid> Downloads { get; } = [];
+    public bool HasActivePermissionPrompt { get; set; }
     public Action? Teardown { get; set; }
 }
 
@@ -33,6 +35,7 @@ public sealed class TabManagerService
     public Guid? FocusedTabId { get; set; }
     public Func<Guid?>? FocusedTabIdProvider { get; set; }
     public Guid? SplitTabId { get; set; }
+    public Action<TabRuntime>? OnRuntimeDisposing { get; set; }
 
     public Dictionary<Guid, TabRuntime> Runtimes => _runtimes;
     public int RuntimeCount => _runtimes.Count;
@@ -74,7 +77,9 @@ public sealed class TabManagerService
     {
         if (_runtimes.Remove(tabId, out var runtime))
         {
+            try { OnRuntimeDisposing?.Invoke(runtime); } catch { }
             try { runtime.Teardown?.Invoke(); } catch { }
+            runtime.Teardown = null;
             try
             {
                 if (runtime.View.Parent is Panel parent)
@@ -85,6 +90,49 @@ public sealed class TabManagerService
             }
             catch { }
         }
+    }
+
+    /// <summary>
+    /// Discards WebView2 runtimes for inactive background tabs that are not protected:
+    /// - Not currently focused or visible in split-view
+    /// - Not playing audio
+    /// - Not performing active downloads
+    /// - Not involved in active permission prompts or critical dialogs
+    /// - Not actively loading
+    /// - Not accessed within the recency threshold (default 30 seconds)
+    /// Discarded tabs release full OS renderer processes and memory back to the system.
+    /// Candidates are discarded in Least Recently Used (LRU) order.
+    /// </summary>
+    public List<Guid> DiscardInactiveRuntimes(
+        ISet<Guid> protectedTabIds,
+        int maxRetainedBackgroundViews = 1,
+        Func<Guid, DateTimeOffset?>? lastAccessedProvider = null,
+        Func<Guid, bool>? isLoadingProvider = null,
+        TimeSpan? minInactiveDuration = null)
+    {
+        var discarded = new List<Guid>();
+        var now = DateTimeOffset.UtcNow;
+        var inactiveThreshold = minInactiveDuration ?? TimeSpan.FromSeconds(30);
+
+        var candidateIds = TabLifecyclePolicy.SelectDiscardCandidates(
+            _runtimes.Keys,
+            id => protectedTabIds.Contains(id),
+            id => _runtimes.TryGetValue(id, out var r) && r.HasActivePermissionPrompt,
+            id => _runtimes.TryGetValue(id, out var r) && r.Downloads.Count > 0,
+            id => _runtimes.TryGetValue(id, out var r) && r.View.CoreWebView2?.IsDocumentPlayingAudio == true,
+            id => isLoadingProvider?.Invoke(id) == true,
+            id => lastAccessedProvider?.Invoke(id) ?? DateTimeOffset.MinValue,
+            inactiveThreshold,
+            maxRetainedBackgroundViews,
+            now);
+
+        foreach (var tabId in candidateIds)
+        {
+            DisposeRuntime(tabId);
+            discarded.Add(tabId);
+        }
+
+        return discarded;
     }
 
     public void Clear()

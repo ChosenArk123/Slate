@@ -128,16 +128,19 @@ dotnet run --project Slate.Tests/Slate.Tests.csproj
    - `IsPasswordAutosaveEnabled = false`
    - `AreDevToolsEnabled = settings.DeveloperToolsEnabled`
    - `IsStatusBarEnabled = false`
-4. **Navigation:** `NavigateAsync(input)` → `Navigation.Resolve()` → `core.Navigate(url)`. Sleeping tabs call `core.Resume()` before navigating.
-5. **Security policies:**
+4. **Navigation & HTTPS-First:** `NavigateAsync(input)` → `Navigation.Resolve()` → `core.Navigate(url)`. Public HTTP is upgraded to HTTPS by default; an explicit warning is displayed if unencrypted HTTP is loaded. The loopback exemption (permitting HTTP without warning) is strictly limited to `localhost`, `*.localhost`, `127.0.0.0/8`, and `::1`. LAN IPs (`192.168.x.x`, `10.x.x.x`) and mDNS (`.local`) are rejected from loopback status. Silent HTTPS->HTTP downgrades across redirects, popups, and new tabs are blocked.
+5. **Security policies & startup audits:**
+   - `StartupSecurity.AuditStartupEnvironment`: scrubs dangerous WebView2 environment variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER`, `WEBVIEW2_USER_DATA_FOLDER`, `WEBVIEW2_PIPE_FOR_REMOTING`, etc.) while leaving benign variables intact.
+   - `StartupSecurity.ValidateCommandLine`: rejects dangerous Chromium switches (sandbox bypass, remote debugging, site-isolation disabling such as `--disable-features=IsolateOrigins,site-per-process`) and unrecognized flags.
+   - `AuditRegistryPolicies`: audits `SOFTWARE\Policies\Microsoft\Edge\WebView2` and rejects unauthorized binary or user data folder redirects.
    - `NavigationStarting`: cancels non-http/https/about:blank/file navigation.
    - `FrameNavigationStarting`: filters iframe destinations via `Navigation.IsAllowedFrameUrl`.
    - `LaunchingExternalUriScheme`: always cancelled to prevent arbitrary protocol handler exploitation.
    - `ServerCertificateErrorDetected`: cancels navigation, marks `CertificateError`, and captures `LastCertificate` for user inspection.
-   - `NewWindowRequested`: enforces user-gesture check + burst rate limit (5 popups / 10s per host, 10 global).
-   - `PermissionRequested`: checks origin + user gesture + per-type policy + burst rate limit (3 prompts / 1 min per host, 6 global).
+   - `NewWindowRequested`: enforces user-gesture check + burst rate limit (5 popups / 10s per host, 10 global), and blocks HTTP downgrade popups.
+   - `PermissionRequested`: checks origin + user gesture + per-type policy + burst rate limit (3 prompts / 1 min per host, 6 global). Sets `HasActivePermissionPrompt` to prevent tab discard during active user prompts.
 6. **InPrivate isolation:** InPrivate tabs (`IsPrivate = true`) initialize with an isolated profile (`IsInPrivateModeEnabled = true`). They share no cookies, storage, or cache with regular tabs, record zero history, omit session persistence, and do not attach a password controller.
-7. **Disposal:** `DisposeRuntime(id)` removes view and calls `Close()`. Runtimes with active downloads are kept alive until downloads complete.
+7. **Disposal:** `DisposeRuntime(id)` removes view, detaches `CommandRouter`, and calls `Close()`. Runtimes with active downloads are kept alive until downloads complete.
 
 ---
 
@@ -179,7 +182,11 @@ dotnet run --project Slate.Tests/Slate.Tests.csproj
 3. **Local directory safety (`DownloadSafety.IsSafeLocalDirectory`):**
    - Rejects UNC network paths (`\\server\share`, `//server/share`) to prevent SMB credential and NTLM hash leakage.
    - Enforces rooted local drive paths (`C:\...`).
-4. **Local file opening (`Navigation.IsLocalFileUrl`, `Navigation.IsDangerousExtension`):**
+4. **Mark-of-the-Web (`DownloadSafety.AttachZoneIdentifier`, `DownloadSafety.FormatZoneIdentifier`):**
+   - Attaches `ZoneId=3` (Internet) via NTFS Alternate Data Stream (`Zone.Identifier`) to invoke Windows SmartScreen/Defender inspection on downloaded files.
+   - Strictly sanitizes `HostUrl` and `ReferrerUrl` (strips `\r`, `\n`, `\0`, `[`, `]`, control characters, and clamps to 2048 chars) to eliminate INI injection downgrades (`\r\nZoneId=0`).
+   - Strictly best-effort and non-destructive: fails safe without deleting or failing downloads on FAT32, exFAT, ReFS, locked files, or symlink/reparse points.
+5. **Local file opening (`Navigation.IsLocalFileUrl`, `Navigation.IsDangerousExtension`):**
    - Rejects UNC paths.
    - Rejects dangerous executable and script extensions (`.exe`, `.bat`, `.cmd`, `.ps1`, `.vbs`, `.msi`, `.dll`, `.com`, `.scr`, `.reg`, `.hta`, `.cpl`, `.pif`).
    - Allows safe document inspection (`.html`, `.htm`, `.txt`, `.pdf`, `.json`, etc.).
@@ -190,8 +197,13 @@ dotnet run --project Slate.Tests/Slate.Tests.csproj
 
 - **Creation:** `BrowserSession.AddTab()` enforces 100-tab cap. Supports `temporary` and `isPrivate` flags. `slate://newtab` tabs skip WebView2 allocation.
 - **Activation:** `BrowserSession.Activate()` updates `ActiveWorkspace.ActiveTabId` and `LastAccessed`. Non-visible WebViews parked in `_parkedViews` (remain alive, do not render).
-- **Sleeping:** `_sleepTimer` (30s interval) checks tabs idle > `SleepAfterMinutes` (default 15). Calls `core.TrySuspendAsync()`. Guarded: no sleep if tab is visible, loading, playing audio, or has active downloads.
-- **Wake:** Selecting a sleeping tab → `core.Resume()`.
+- **Sleeping (Suspend):** `_sleepTimer` (30s interval) checks tabs idle > `SleepAfterMinutes` (default 15). Calls `core.TrySuspendAsync()`. Tab runtime remains alive; DOM, JS execution context, and WebSockets are preserved. Guarded: no suspend if tab is visible, loading, playing audio, or downloading.
+- **Discarding (Gaming Efficiency / Memory Pressure):** `GamingEfficiencyService` and `TabManagerService.DiscardInactiveRuntimes`. Completely disposes `WebView2` and detaches from UI tree, terminating OS renderer processes and reclaiming >70% RAM.
+  - **State Survival:** Only `BrowserTab` model survives (`Url`, `Title`, `Favicon`, `IsPinned`, `IsPrivate`, `LastAccessed`). In-memory DOM, script states, WebSockets, and navigation back/forward history are destroyed.
+  - **Protection Policy:** Active tab, split tab, focused tab, audio-playing tabs (`IsDocumentPlayingAudio == true`), active downloads, active permission prompts/dialogs, loading tabs, and recently accessed tabs (< 30s) are protected.
+  - **Candidate Selection:** Evaluated in Least Recently Used (LRU) order via `TabLifecyclePolicy.SelectDiscardCandidates`.
+  - **Reclamation:** Immediately after discard, synchronous `GC.Collect()` and `TrimWorkingSet()` (`SetProcessWorkingSetSize(-1, -1)`) reclaim physical RAM on the UI thread.
+- **Wake / Reactivation:** Selecting a sleeping tab calls `core.Resume()`. Selecting a discarded tab recreates the `WebView2` runtime lazily and re-navigates to `tab.Url`.
 - **Close:** `BrowserSession.CloseTab()` archives to `RecentlyClosed` (30 max). Temporary and InPrivate tabs are never archived. If tab was the last in workspace, `EnsureActiveTab` creates a new-tab placeholder.
 - **Restore:** `BrowserSession.RestoreClosed()` re-adds with `IsSleeping=true`, activates.
 - **Session save:** Debounced 650ms `DispatcherTimer`. `StateStore.Save()` writes atomic temp → replace. Temporary and InPrivate tabs filtered out of persistence. Final synchronous save on `Shutdown()`.

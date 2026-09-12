@@ -82,8 +82,8 @@ public static class SecurityAuditTests
                 // Load state from store and verify InPrivate tab is absent
                 var loadedState = store.Load();
                 Assert(loadedState is not null);
-                Assert(!loadedState.Tabs.Any(t => t.IsPrivate), "Loaded tabs must contain zero InPrivate tabs");
-                Assert(!loadedState.Tabs.Any(t => t.Url.Contains("secret-private.example.com")), "Loaded tabs must not have InPrivate URL");
+                Assert(!loadedState!.Tabs.Any(t => t.IsPrivate), "Loaded tabs must contain zero InPrivate tabs");
+                Assert(!loadedState!.Tabs.Any(t => t.Url.Contains("secret-private.example.com")), "Loaded tabs must not have InPrivate URL");
             }
             finally
             {
@@ -447,6 +447,333 @@ public static class SecurityAuditTests
             Assert(!Navigation.IsSecureOrigin("ftp://example.com"), "FTP must NOT be secure origin");
             Assert(!Navigation.IsSecureOrigin(""), "Empty origin must NOT be secure origin");
             Assert(!Navigation.IsSecureOrigin(null), "Null origin must NOT be secure origin");
+        });
+
+        // -----------------------------------------------------------------
+        // 5. Unicode / BiDi / UI Spoofing Resistance
+        // -----------------------------------------------------------------
+        check("Security Audit: BiDi override and isolate characters are neutralized in titles and labels", () =>
+        {
+            // Right-to-Left Override (RLO) U+202E disguised extension attack: "document\u202Eexe.pdf"
+            string rloDisguise = "document\u202Eexe.pdf";
+            string sanitized = BrowserText.SanitizeLabel(rloDisguise, 100);
+            Assert(!sanitized.Contains('\u202E'), "RLO character must be stripped");
+            Assert(!sanitized.Contains('\u202D'), "LRO character must be stripped");
+            Equal("documentexe.pdf", sanitized);
+
+            // Matrix of all dangerous BiDi controls: LRE, RLE, PDF, LRO, RLO, LRI, RLI, FSI, PDI, LRM, RLM, ALM
+            char[] dangerousBidi =
+            [
+                '\u202A', '\u202B', '\u202C', '\u202D', '\u202E',
+                '\u2066', '\u2067', '\u2068', '\u2069',
+                '\u200E', '\u200F', '\u061C'
+            ];
+
+            foreach (var bidi in dangerousBidi)
+            {
+                Assert(BrowserText.IsDangerousFormatting(bidi), $"Character U+{(int)bidi:X4} must be identified as dangerous");
+                string testInput = $"site{bidi}.example.com";
+                string clean = BrowserText.SanitizeLabel(testInput, 100);
+                Assert(!clean.Contains(bidi), $"Character U+{(int)bidi:X4} must be stripped by SanitizeLabel");
+            }
+
+            // Zero-width spaces, byte order mark, and line separators
+            char[] invisibleChars = ['\u200B', '\uFEFF', '\u2028', '\u2029', '\uFFF9', '\uFFFC'];
+            foreach (var inv in invisibleChars)
+            {
+                Assert(BrowserText.IsDangerousFormatting(inv), $"Character U+{(int)inv:X4} must be identified as dangerous");
+                string testInput = $"pay{inv}pal.com";
+                string clean = BrowserText.SanitizeLabel(testInput, 100);
+                Assert(!clean.Contains(inv), $"Character U+{(int)inv:X4} must be stripped by SanitizeLabel");
+            }
+
+            // Legitimate international text MUST be preserved
+            string arabic = "مرحبا بالعالم";
+            Equal(arabic, BrowserText.SanitizeTitle(arabic));
+
+            string hebrew = "שלום עולם";
+            Equal(hebrew, BrowserText.SanitizeTitle(hebrew));
+
+            string cjk = "Slate 浏览器 / ブラウザ / 브라우저";
+            Equal(cjk, BrowserText.SanitizeTitle(cjk));
+
+            string cyrillic = "Безопасный Браузер";
+            Equal(cyrillic, BrowserText.SanitizeTitle(cyrillic));
+
+            string accented = "Café résumé övergröße niño";
+            Equal(accented, BrowserText.SanitizeTitle(accented));
+
+            string emoji = "Slate Browser 🚀✨🛡️";
+            Equal(emoji, BrowserText.SanitizeTitle(emoji));
+
+            // SanitizeHost strips dangerous formatting and whitespace
+            Equal("example.com", BrowserText.SanitizeHost(" example.com\u202E "));
+            Equal("localhost", BrowserText.SanitizeHost("localhost"));
+            Equal("unknown", BrowserText.SanitizeHost("   "));
+        });
+
+        // -----------------------------------------------------------------
+        // 6. HTTPS-First Policy and Downgrade Prevention
+        // -----------------------------------------------------------------
+        check("Security Audit: HTTPS-First upgrades public HTTP while preserving local dev endpoints", () =>
+        {
+            // Public bare domains upgrade to HTTPS
+            Equal("https://example.com/", Navigation.Resolve("example.com"));
+            Equal("https://sub.domain.example.org/path", Navigation.Resolve("sub.domain.example.org/path"));
+
+            // Public explicit HTTP is upgraded to HTTPS (HTTPS-First)
+            Equal("https://example.com/", Navigation.Resolve("http://example.com"));
+            Equal("https://example.com/login?u=1", Navigation.Resolve("http://example.com/login?u=1"));
+            Equal("https://example.com:8443/test", Navigation.Resolve("http://example.com:8443/test"));
+
+            // Local development endpoints remain HTTP
+            Equal("http://localhost:3000/api", Navigation.Resolve("http://localhost:3000/api"));
+            Equal("http://localhost:3000/test", Navigation.Resolve("localhost:3000/test"));
+            Equal("http://127.0.0.1:8080/", Navigation.Resolve("http://127.0.0.1:8080/"));
+            Equal("http://127.255.255.254:8080/", Navigation.Resolve("http://127.255.255.254:8080/"));
+            Equal("http://[::1]:9090/", Navigation.Resolve("http://[::1]:9090/"));
+
+            // Non-loopback LAN and reserved test domains are upgraded to HTTPS
+            Equal("https://example.local/", Navigation.Resolve("http://example.local"));
+            Equal("https://foo.test/", Navigation.Resolve("http://foo.test"));
+            Equal("https://192.168.1.10/", Navigation.Resolve("http://192.168.1.10"));
+            Equal("https://10.0.0.1/", Navigation.Resolve("http://10.0.0.1"));
+
+            // IsLoopbackOrLocalHost checks: strictly loopback only
+            Assert(Navigation.IsLoopbackOrLocalHost("localhost"));
+            Assert(Navigation.IsLoopbackOrLocalHost("localhost."));
+            Assert(Navigation.IsLoopbackOrLocalHost("dev.localhost"));
+            Assert(Navigation.IsLoopbackOrLocalHost("foo.localhost"));
+            Assert(!Navigation.IsLoopbackOrLocalHost(".localhost")); // missing label
+            Assert(Navigation.IsLoopbackOrLocalHost("127.0.0.1"));
+            Assert(Navigation.IsLoopbackOrLocalHost("127.0.0.2"));
+            Assert(Navigation.IsLoopbackOrLocalHost("127.255.255.254")); // 127.0.0.0/8 full block
+            Assert(Navigation.IsLoopbackOrLocalHost("::1"));
+            Assert(Navigation.IsLoopbackOrLocalHost("[::1]"));
+
+            // Must NOT treat LAN/test/external as loopback
+            Assert(!Navigation.IsLoopbackOrLocalHost("example.local"));
+            Assert(!Navigation.IsLoopbackOrLocalHost("foo.test"));
+            Assert(!Navigation.IsLoopbackOrLocalHost("192.168.1.10"));
+            Assert(!Navigation.IsLoopbackOrLocalHost("10.0.0.1"));
+            Assert(!Navigation.IsLoopbackOrLocalHost("example.com"));
+            Assert(!Navigation.IsLoopbackOrLocalHost("8.8.8.8"));
+
+            // IsPublicHttp checks: unencrypted HTTP on non-loopback requires warning / upgrade
+            Assert(Navigation.IsPublicHttp("http://example.com/"));
+            Assert(Navigation.IsPublicHttp("http://example.local/"));
+            Assert(Navigation.IsPublicHttp("http://foo.test/"));
+            Assert(Navigation.IsPublicHttp("http://192.168.1.10/"));
+            Assert(Navigation.IsPublicHttp("http://10.0.0.1/"));
+            Assert(!Navigation.IsPublicHttp("https://example.com/"));
+            Assert(!Navigation.IsPublicHttp("http://localhost:3000/"));
+            Assert(!Navigation.IsPublicHttp("http://foo.localhost:3000/"));
+            Assert(!Navigation.IsPublicHttp("http://127.0.0.1:8080/"));
+            Assert(!Navigation.IsPublicHttp("http://127.255.255.254:8080/"));
+            Assert(!Navigation.IsPublicHttp("http://[::1]:8080/"));
+
+            // Insecure HTTP downgrade detection
+            Assert(IsDowngrade("https://secure.example.com/page", "http://insecure.example.com/page"));
+            Assert(IsDowngrade("https://secure.example.com/", "http://example.local/"));
+            Assert(IsDowngrade("https://secure.example.com/", "http://foo.test/"));
+            Assert(IsDowngrade("https://secure.example.com/", "http://192.168.1.10/"));
+            Assert(!IsDowngrade("https://secure.example.com/", "http://localhost:3000/"));
+            Assert(!IsDowngrade("https://secure.example.com/", "http://127.0.0.1:8080/"));
+            Assert(!IsDowngrade("https://secure.example.com/", "https://other.example.com/"));
+            Assert(!IsDowngrade("about:blank", "http://insecure.example.com/"));
+
+            static bool IsDowngrade(string currentUrl, string targetUrl)
+            {
+                if (Uri.TryCreate(currentUrl, UriKind.Absolute, out var cur) &&
+                    Uri.TryCreate(targetUrl, UriKind.Absolute, out var tgt))
+                {
+                    return cur.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) &&
+                           tgt.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) &&
+                           !Navigation.IsLoopbackOrLocalHost(tgt.Host);
+                }
+                return false;
+            }
+        });
+
+        // -----------------------------------------------------------------
+        // 7. Dangerous Extension Matrix (Windows Execution & Shortcut Vectors)
+        // -----------------------------------------------------------------
+        check("Security Audit: Expanded dangerous extension matrix blocks modern Windows vectors", () =>
+        {
+            string[] highRiskExtensions =
+            [
+                // Traditional executables & scripts
+                "exe", "bat", "cmd", "com", "cpl", "dll", "hta", "jar", "js", "jse",
+                "lnk", "msc", "msi", "msp", "mst", "pif", "ps1", "reg", "scr", "vbs", "wsf",
+                // Modern Windows app packages
+                "msix", "msixbundle", "appx", "appxbundle",
+                // Disk images & containers
+                "iso", "vhd", "vhdx", "img",
+                // Windows settings / search / shell shortcuts
+                "settingcontent-ms", "search-ms", "desklink", "mapimail", "theme", "themepack",
+                // Help files & sandboxes
+                "chm", "wsb",
+                // Certificate & keystore formats
+                "cer", "crt", "der", "pfx", "p12",
+                // Web queries
+                "iqy", "rqy"
+            ];
+
+            foreach (var ext in highRiskExtensions)
+            {
+                Assert(Navigation.IsDangerousExtension(ext), $"Extension .{ext} must be identified as dangerous");
+                Assert(Navigation.IsDangerousExtension("." + ext), $"Extension .{ext} (with dot) must be identified as dangerous");
+                Assert(Navigation.IsDangerousExtension(ext.ToUpperInvariant()), $"Extension .{ext.ToUpperInvariant()} must be case-insensitively dangerous");
+            }
+
+            // Safe document extensions must NOT be blocked
+            string[] safeExtensions = ["html", "htm", "txt", "pdf", "json", "png", "jpg", "jpeg", "webp", "zip", "tar", "gz"];
+            foreach (var ext in safeExtensions)
+            {
+                Assert(!Navigation.IsDangerousExtension(ext), $"Extension .{ext} must NOT be flagged as dangerous");
+                Assert(!Navigation.IsDangerousExtension("." + ext), $"Extension .{ext} must NOT be flagged as dangerous");
+            }
+        });
+
+        // -----------------------------------------------------------------
+        // 8. Startup Environment & Command-Line Hardening
+        // -----------------------------------------------------------------
+        check("Security Audit: Startup validation rejects dangerous browser switches and detects overrides", () =>
+        {
+            // Dangerous switches across prefix variants, casing, and surrounding quotes
+            string[] dangerousSwitches =
+            [
+                "no-sandbox",
+                "disable-web-security",
+                "ignore-certificate-errors",
+                "remote-debugging-port",
+                "remote-debugging-pipe",
+                "disable-site-isolation-trials",
+                "disable-site-isolation-for-policy",
+                "single-process",
+                "renderer-process-limit"
+            ];
+
+            foreach (var sw in dangerousSwitches)
+            {
+                Assert(StartupSecurity.IsDangerousArgument($"--{sw}"), $"--{sw} must be dangerous");
+                Assert(StartupSecurity.IsDangerousArgument($"-{sw}"), $"-{sw} must be dangerous");
+                Assert(StartupSecurity.IsDangerousArgument($"/{sw}"), $"/{sw} must be dangerous");
+                Assert(StartupSecurity.IsDangerousArgument($"--{sw}=value"), $"--{sw}=value must be dangerous");
+                Assert(StartupSecurity.IsDangerousArgument($"\"--{sw}\""), $"\"--{sw}\" (quoted) must be dangerous");
+                Assert(StartupSecurity.IsDangerousArgument($"'--{sw}'"), $"'--{sw}' (single-quoted) must be dangerous");
+                Assert(StartupSecurity.IsDangerousArgument($"  --{sw.ToUpperInvariant()}  "), $"Cased/padded --{sw} must be dangerous");
+            }
+
+            // Disabled site isolation variations
+            Assert(StartupSecurity.IsDangerousArgument("--disable-features=IsolateOrigins,site-per-process"));
+            Assert(StartupSecurity.IsDangerousArgument("--disable-features=site-per-process"));
+            Assert(StartupSecurity.IsDangerousArgument("--disable-features=\"IsolateOrigins\""));
+            Assert(StartupSecurity.IsDangerousArgument("/disable-site-isolation-for-policy"));
+
+            // Benign arguments must NOT be falsely flagged
+            Assert(!StartupSecurity.IsDangerousArgument("--enable-features=IntensiveWakeUpThrottling"));
+            Assert(!StartupSecurity.IsDangerousArgument("--site-per-process"));
+            Assert(!StartupSecurity.IsDangerousArgument("--allow-something-else"));
+
+            // Command-line validation allowlist
+            Assert(StartupSecurity.ValidateCommandLine(["Slate.exe", "--hardened-isolation"], out _));
+            Assert(StartupSecurity.ValidateCommandLine(["Slate.exe", "-hardened-isolation"], out _));
+            Assert(StartupSecurity.ValidateCommandLine(["Slate.exe", "--smoke-test=C:\\test\\smoke.json"], out _));
+            Assert(StartupSecurity.ValidateCommandLine(["Slate.exe", "--memory-benchmark"], out _));
+            Assert(StartupSecurity.ValidateCommandLine(["Slate.exe", "--memory-benchmark=C:\\test\\bench.json"], out _));
+            Assert(StartupSecurity.ValidateCommandLine(["Slate.exe", "https://example.com"], out _));
+
+            // Hostile command-line injection must fail validation
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--no-sandbox"], out var r1));
+            Assert(r1!.Contains("Dangerous"), "Rejection reason must identify dangerous switch");
+
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--remote-debugging-port=9222"], out var r2));
+            Assert(r2!.Contains("Dangerous"), "Rejection reason must identify dangerous switch");
+
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--disable-web-security"], out _));
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--single-process"], out _));
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--disable-features=site-per-process"], out _));
+            Assert(!StartupSecurity.ValidateCommandLine(["Slate.exe", "--arbitrary-unrecognized-switch"], out var r3));
+            Assert(r3!.Contains("Unrecognized"), "Unrecognized switches must be rejected");
+
+            // Verify security-sensitive WebView2 environment variables are cataloged
+            Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"));
+            Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER"));
+            Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_USER_DATA_FOLDER"));
+            Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_RELEASE_CHANNEL_PREFERENCE"));
+            Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_PIPE_FOR_BLOCKED_SCRIPT"));
+            Assert(StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("EDGE_ADDITIONAL_BROWSER_ARGUMENTS"));
+
+            // Verify benign UI variables are NOT in dangerous blacklist
+            Assert(!StartupSecurity.DangerousWebView2EnvironmentVariables.Contains("WEBVIEW2_DEFAULT_BACKGROUND_COLOR"));
+        });
+
+        // -----------------------------------------------------------------
+        // 9. Zone.Identifier (Mark of the Web) Attachment & Structural Safety
+        // -----------------------------------------------------------------
+        check("Security Audit: DownloadSafety formats safe Zone.Identifier and prevents INI injection", () =>
+        {
+            // Valid HTTP/HTTPS URLs produce well-formed INI
+            string normalIni = DownloadSafety.FormatZoneIdentifier("https://secure.example.com/download.exe");
+            Assert(normalIni.Contains("[ZoneTransfer]\r\nZoneId=3\r\n"), "Must specify ZoneId=3");
+            Assert(normalIni.Contains("HostUrl=https://secure.example.com/download.exe\r\n"), "Must include HostUrl");
+
+            // Adversarial CRLF / INI injection: attacker tries to inject ZoneId=0 (Local Machine / Full Trust)
+            string crlfAttack = "https://evil.example.com/file.exe\r\nZoneId=0\r\n[AttackerSection]\r\nAdmin=True";
+            string sanitizedIni = DownloadSafety.FormatZoneIdentifier(crlfAttack);
+
+            // Must NOT contain separate ZoneId=0 line
+            Assert(!sanitizedIni.Contains("\r\nZoneId=0"), "CRLF injection must not create separate ZoneId=0 line");
+            Assert(!sanitizedIni.Contains("[AttackerSection]"), "Section brackets must be stripped");
+            // Must retain genuine ZoneId=3
+            Assert(sanitizedIni.Contains("ZoneId=3\r\n"), "Genuine ZoneId=3 must be retained");
+
+            // Null-byte injection
+            string nullAttack = "https://evil.example.com/file.exe\0ZoneId=0";
+            string nullClean = DownloadSafety.FormatZoneIdentifier(nullAttack);
+            Assert(!nullClean.Contains('\0'), "Null bytes must be stripped");
+
+            // Length clamping: extremely long URL clamped to <= 2048 chars
+            string hugeUrl = "https://example.com/" + new string('a', 5000);
+            string hugeIni = DownloadSafety.FormatZoneIdentifier(hugeUrl);
+            Assert(hugeIni.Length <= 2200, "Formatted Zone.Identifier must be bounded in length");
+
+            // Unsupported non-web schemes omitted from HostUrl
+            string fileScheme = DownloadSafety.FormatZoneIdentifier("file:///C:/malicious.exe");
+            Assert(!fileScheme.Contains("HostUrl="), "file:// scheme must not be written to HostUrl");
+            string jsScheme = DownloadSafety.FormatZoneIdentifier("javascript:alert(1)");
+            Assert(!jsScheme.Contains("HostUrl="), "javascript: scheme must not be written to HostUrl");
+
+            // Best-effort attachment on file
+            var tempDir = Path.Combine(Path.GetTempPath(), "slate-motw-test-" + Guid.NewGuid());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                var filePath = Path.Combine(tempDir, "sample_download.pdf");
+                File.WriteAllText(filePath, "%PDF-1.4 sample content");
+
+                Assert(DownloadSafety.AttachZoneIdentifier(filePath, "https://secure.example.com/sample_download.pdf"));
+
+                // If running on an NTFS drive, verify the stream contents
+                string streamPath = filePath + ":Zone.Identifier";
+                if (File.Exists(streamPath))
+                {
+                    string streamContent = File.ReadAllText(streamPath);
+                    Assert(streamContent.Contains("[ZoneTransfer]"), "Stream must include [ZoneTransfer]");
+                    Assert(streamContent.Contains("ZoneId=3"), "Stream must specify Internet Zone (ZoneId=3)");
+                    Assert(streamContent.Contains("HostUrl=https://secure.example.com/sample_download.pdf"), "Stream must include HostUrl");
+                }
+
+                // Invalid / non-existent file handling returns false gracefully without throwing
+                Assert(!DownloadSafety.AttachZoneIdentifier(null));
+                Assert(!DownloadSafety.AttachZoneIdentifier(Path.Combine(tempDir, "non_existent.txt")));
+                Assert(!DownloadSafety.AttachZoneIdentifier(@"\\server\share\file.txt"));
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+            }
         });
     }
 }

@@ -174,4 +174,93 @@ public static class DownloadSafety
             return false;
         }
     }
+
+    /// <summary>
+    /// Formats a structurally safe Windows Mark-of-the-Web (Zone.Identifier) INI payload.
+    /// Neutralizes line breaks, control characters, section delimiters, and length attacks
+    /// to prevent INI injection into ZoneTransfer attributes.
+    /// </summary>
+    public static string FormatZoneIdentifier(string? sourceUrl, string? referrerUrl = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("[ZoneTransfer]\r\nZoneId=3\r\n");
+
+        string? cleanSource = SanitizeZoneUrl(sourceUrl);
+        if (!string.IsNullOrEmpty(cleanSource))
+        {
+            sb.Append("HostUrl=").Append(cleanSource).Append("\r\n");
+        }
+
+        string? cleanReferrer = SanitizeZoneUrl(referrerUrl);
+        if (!string.IsNullOrEmpty(cleanReferrer))
+        {
+            sb.Append("ReferrerUrl=").Append(cleanReferrer).Append("\r\n");
+        }
+
+        return sb.ToString();
+    }
+
+    private static string? SanitizeZoneUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+
+        string trimmed = url.Trim();
+        if (trimmed.Length > 2048)
+        {
+            trimmed = trimmed[..2048];
+        }
+
+        // Must be an HTTP or HTTPS web URL
+        if (!trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        // Strip CR, LF, NUL, control characters, brackets, and invalid chars to prevent INI section or key injection
+        var clean = new System.Text.StringBuilder(trimmed.Length);
+        foreach (char c in trimmed)
+        {
+            if (char.IsControl(c) || c == '[' || c == ']' || c == '\r' || c == '\n' || c == '\0')
+            {
+                continue;
+            }
+            clean.Append(c);
+        }
+
+        string result = clean.ToString().Trim();
+        if (result.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            result.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return result;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Attaches the Windows Mark-of-the-Web (Zone.Identifier) alternate data stream to downloaded files.
+    /// This ensures Windows Defender, SmartScreen, and file reputation services inspect the file upon execution.
+    /// Attachment is best-effort and will never fail or delete a completed download.
+    /// </summary>
+    public static bool AttachZoneIdentifier(string? path, string? sourceUrl = null, string? referrerUrl = null)
+    {
+        if (!IsSafeLocalFilePath(path) || !File.Exists(path)) return false;
+        try
+        {
+            // Verify path has not become a reparse point (symlink/junction)
+            var attr = File.GetAttributes(path);
+            if ((attr & FileAttributes.ReparsePoint) != 0) return false;
+
+            string streamPath = path + ":Zone.Identifier";
+            string content = FormatZoneIdentifier(sourceUrl, referrerUrl);
+            File.WriteAllText(streamPath, content);
+            return true;
+        }
+        catch
+        {
+            // Non-NTFS drives (e.g. FAT32/exFAT), locked files, or restricted environments may not support ADS.
+            return false;
+        }
+    }
 }
