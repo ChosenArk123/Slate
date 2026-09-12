@@ -164,13 +164,41 @@ public sealed partial class MainWindow
         }
     }
 
-    private void ToggleFullScreen(bool? force = null) => ToggleUserFullScreen(force);
+    private void ToggleFullScreen(bool? force = null)
+    {
+        if (_isPageFullScreen)
+        {
+            ExitPageFullScreen();
+            if (force == true) return;
+        }
+        ToggleUserFullScreen(force);
+    }
 
     private void ToggleUserFullScreen(bool? force = null)
     {
         bool target = force ?? !_isUserFullScreen;
         if (_isUserFullScreen == target) return;
         _isUserFullScreen = target;
+
+        if (target)
+        {
+            if (!_isPageFullScreen)
+            {
+                _pageFullscreenText.Text = "Press F11 or Esc to exit full screen";
+                _pageFullscreenIndicator.Visibility = Visibility.Visible;
+                _pageFullscreenTimer.Stop();
+                _pageFullscreenTimer.Start();
+            }
+        }
+        else
+        {
+            if (!_isPageFullScreen)
+            {
+                _pageFullscreenTimer.Stop();
+                _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+            }
+        }
+
         ApplyFullScreenLayout();
     }
 
@@ -216,19 +244,54 @@ public sealed partial class MainWindow
         bool isAnyFullScreen = _isUserFullScreen || _isPageFullScreen;
         if (isAnyFullScreen)
         {
+            if (AppWindow.Presenter is OverlappedPresenter op)
+            {
+                _wasMaximizedBeforeFullScreen = op.State == OverlappedPresenterState.Maximized;
+            }
+
+            _titleBar.Visibility = Visibility.Collapsed;
+            _root.RowDefinitions[0].Height = new(0);
+
             _sidebar.Visibility = Visibility.Collapsed;
+            _body.ColumnDefinitions[0].Width = new(0);
+
             _toolbarSurface.Visibility = Visibility.Collapsed;
             _status.Visibility = Visibility.Collapsed;
+            _content.RowDefinitions[3].Height = new(0);
             _content.Margin = new(0);
+
+            _pageFrame.CornerRadius = new(0);
+            _pageFrame.BorderThickness = new(0);
+            _topEdgeTrigger.Visibility = Visibility.Visible;
+
             try { AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen); } catch { }
         }
         else
         {
+            _topEdgeTrigger.Visibility = Visibility.Collapsed;
+            _titleBar.Visibility = Visibility.Visible;
+            _root.RowDefinitions[0].Height = new(36);
+
             _sidebar.Visibility = Visibility.Visible;
+            _body.ColumnDefinitions[0].Width = new(Collapsed ? 64 : 228);
+
             _toolbarSurface.Visibility = Visibility.Visible;
             _status.Visibility = Visibility.Visible;
+            _content.RowDefinitions[3].Height = new(24);
             _content.Margin = new(0, 0, 10, 0);
-            try { AppWindow.SetPresenter(AppWindowPresenterKind.Default); } catch { }
+
+            _pageFrame.CornerRadius = new(SlateTheme.RadiusMedium);
+            _pageFrame.BorderThickness = new(1);
+
+            try
+            {
+                AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+                if (_wasMaximizedBeforeFullScreen && AppWindow.Presenter is OverlappedPresenter op)
+                {
+                    op.Maximize();
+                }
+            }
+            catch { }
         }
     }
 
@@ -284,6 +347,7 @@ public sealed partial class MainWindow
 
     private void StopLoading()
     {
+        if (_findBarOpen) { CloseFindBar(); return; }
         if (_isPageFullScreen)
         {
             ExitPageFullScreen();
@@ -294,7 +358,6 @@ public sealed partial class MainWindow
             ToggleUserFullScreen(false);
             return;
         }
-        if (_findBarOpen) { CloseFindBar(); return; }
         if (FocusedTab.IsLoading) CurrentCore()?.Stop();
     }
     private bool IsVisible(Guid id) => id == _session.ActiveTab.Id || id == _splitTabId;
@@ -390,6 +453,7 @@ public sealed partial class MainWindow
     {
         if (_downloadsButton is null) return;
         bool hasActive = _downloadOperations.Count > 0;
+        _downloadsButton.Visibility = hasActive ? Visibility.Visible : Visibility.Collapsed;
         _downloadsButton.Foreground = hasActive ? _theme.AccentPrimaryBrush : _theme.TextPrimaryBrush;
         ToolTipService.SetToolTip(_downloadsButton, hasActive ? $"Downloads ({_downloadOperations.Count} active) · Ctrl+J" : "Downloads · Ctrl+J");
     }
@@ -548,7 +612,9 @@ public sealed partial class MainWindow
         if (!IsLive(tab, runtime)) return;
         var core = runtime.View.CoreWebView2;
         core.Settings.AreDefaultContextMenusEnabled = true;
-        core.Settings.AreBrowserAcceleratorKeysEnabled = true;
+        // Slate owns browser commands. WebView2 still preserves editing/movement keys when
+        // browser accelerators are disabled, while the router handles Slate's registry.
+        core.Settings.AreBrowserAcceleratorKeysEnabled = false;
         _engineService.ConfigureHardenedSettings(core.Settings, _session.State.Settings.DeveloperToolsEnabled);
         core.Settings.IsZoomControlEnabled = true;
         core.Settings.IsSwipeNavigationEnabled = false;
@@ -946,6 +1012,13 @@ public sealed partial class MainWindow
         {
             try
             {
+                if (runtime.Passwords is not null)
+                {
+                    runtime.Passwords.OfferChanged -= UpdatePasswordOffer;
+                    runtime.Passwords.AvailabilityChanged -= UpdatePasswordIndicator;
+                    runtime.Passwords.Dispose();
+                    runtime.Passwords = null;
+                }
                 core.ContainsFullScreenElementChanged -= fullScreenHandler;
                 core.IsDocumentPlayingAudioChanged -= audioHandler;
                 core.IsMutedChanged -= mutedHandler;
@@ -971,6 +1044,18 @@ public sealed partial class MainWindow
             }
             catch { }
         };
+        if (!tab.IsPrivate)
+        {
+            runtime.Passwords = new PasswordController(core, _credentialVault,
+                () => IsLive(tab, runtime) && !runtime.Failed && !runtime.Sleeping && !runtime.Suspended && !tab.IsLoading && !runtime.CertificateError,
+                () => tab.IsTemporary, () => IsLive(tab, runtime) && !runtime.Failed,
+                () => _session.State.Settings.AutofillPasswords, () => _session.State.Settings.OfferToSavePasswords,
+                () => tab.IsPrivate, () => tab.Url);
+            runtime.Passwords.OfferChanged += UpdatePasswordOffer;
+            runtime.Passwords.AvailabilityChanged += UpdatePasswordIndicator;
+            await runtime.Passwords.InitializeAsync();
+            if (!IsLive(tab, runtime)) { runtime.Passwords.Dispose(); return; }
+        }
         if (Navigation.IsViewSourceUrl(tab.Url))
         {
             await LoadViewSourceAsync(tab, runtime, core, tab.Url);
@@ -1062,6 +1147,8 @@ public sealed partial class MainWindow
 
     private void UpdateChrome()
     {
+        UpdatePasswordOffer();
+        UpdatePasswordIndicator();
         if (_closing) return;
         var tab = FocusedTab; var core = CurrentCore();
         if (!_addressEditing) _address.Text = tab.Url == Navigation.NewTab ? "" : tab.Url;
@@ -1072,6 +1159,8 @@ public sealed partial class MainWindow
         _reload.IsEnabled = core is not null || _runtimes.GetValueOrDefault(tab.Id)?.Failed == true;
         UpdateZoomBadge();
         UpdateBookmarkIndicator();
+        _bookmarkButton.Visibility = tab.Url == Navigation.NewTab ? Visibility.Collapsed : Visibility.Visible;
+        _security.Visibility = tab.Url != Navigation.NewTab || tab.IsPrivate ? Visibility.Visible : Visibility.Collapsed;
         _progress.Visibility = tab.IsLoading ? Visibility.Visible : Visibility.Collapsed;
         _windowTitle.Text = tab.Title == "New tab" ? "" : tab.Title;
         Title = tab.Title == "New tab" ? "Slate" : tab.Title + " — Slate";
@@ -1114,12 +1203,12 @@ public sealed partial class MainWindow
 
     private Grid BuildNewTab(BrowserTab tab)
     {
-        var grid = new Grid { Padding = new(44, 36, 44, 28), Background = _theme.SurfaceBaseBrush };
+        var grid = new Grid { Padding = new(32, 28, 32, 22), Background = _theme.SurfaceBaseBrush };
         var composition = new Grid();
         composition.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         composition.ColumnDefinitions.Add(new() { Width = new(6, GridUnitType.Star) });
         composition.ColumnDefinitions.Add(new() { Width = new(3, GridUnitType.Star) });
-        var center = new StackPanel { MaxWidth = 620, Spacing = 0, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Center };
+        var center = new StackPanel { MaxWidth = 580, Spacing = 0, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(center, 1); composition.Children.Add(center);
 
         if (tab.IsPrivate)
@@ -1140,7 +1229,7 @@ public sealed partial class MainWindow
         {
             Text = now.ToString("h:mm"),
             FontFamily = new("Segoe UI Variable Display"),
-            FontSize = 54,
+            FontSize = 40,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiLight,
             CharacterSpacing = -25,
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -1152,11 +1241,11 @@ public sealed partial class MainWindow
             FontSize = 12,
             HorizontalAlignment = HorizontalAlignment.Left,
             Foreground = _theme.TextSecondaryBrush,
-            Margin = new(0, 2, 0, 34)
+            Margin = new(0, 2, 0, 24)
         });
 
         // Center the natural-height TextBox, not a stretched template with a top-aligned content host.
-        var search = new TextBox { PlaceholderText = "Search or enter an address", FontSize = 15, MinHeight = 0, Padding = new(0, 8, 8, 8), BorderThickness = new(0), Background = new SolidColorBrush(Colors.Transparent), VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        var search = new TextBox { PlaceholderText = "Search or enter an address", FontSize = 14, MinHeight = 0, Padding = new(0, 8, 8, 8), BorderThickness = new(0), Background = new SolidColorBrush(Colors.Transparent), VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
         search.Resources["TextControlBorderThemeThicknessFocused"] = new Thickness(0);
         search.Resources["TextControlBackgroundFocused"] = new SolidColorBrush(Colors.Transparent);
         search.Resources["TextControlBackgroundPointerOver"] = new SolidColorBrush(Colors.Transparent);
@@ -1170,9 +1259,9 @@ public sealed partial class MainWindow
         var searchSurface = new Border
         {
             Child = searchGrid,
-            MinHeight = 58,
-            Padding = new(18, 0, 8, 0),
-            CornerRadius = new(SlateTheme.RadiusLarge),
+            MinHeight = 44,
+            Padding = new(12, 0, 8, 0),
+            CornerRadius = new(SlateTheme.RadiusMedium),
             BorderThickness = new(1),
             BorderBrush = _theme.DividerBrush,
             Background = _theme.SurfaceInteractiveBrush
@@ -1193,8 +1282,8 @@ public sealed partial class MainWindow
             .ToList();
         if (frequent.Count > 0)
         {
-            center.Children.Add(new TextBlock { Text = "FREQUENTLY VISITED", FontSize = 9, CharacterSpacing = 140, Foreground = _theme.TextMutedBrush, Margin = new(2, 28, 0, 10) });
-            var sites = new Grid { ColumnSpacing = 8 };
+            center.Children.Add(new TextBlock { Text = "Frequent sites", FontSize = 12, Foreground = _theme.TextMutedBrush, Margin = new(0, 22, 0, 8) });
+            var sites = new Grid { ColumnSpacing = 6 };
             for (int i = 0; i < frequent.Count; i++) sites.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
             for (int i = 0; i < frequent.Count; i++)
             {
@@ -1209,12 +1298,12 @@ public sealed partial class MainWindow
                     var host = new Uri(entry.Url).Host;
                     var label = host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? host[4..] : host;
                     var expectedKey = FaviconStore.GetKey(entry.Url);
-                    var iconContainer = new Grid { Width = 28, Height = 28, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Tag = expectedKey };
+                    var iconContainer = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Tag = expectedKey };
                     var monogram = new Border
                     {
-                        Width = 28,
-                        Height = 28,
-                        CornerRadius = new(14),
+                        Width = 24,
+                        Height = 24,
+                        CornerRadius = new(SlateTheme.RadiusSmall),
                         Background = _theme.AccentSoftBrush,
                         Child = new TextBlock { Text = label[..1].ToUpperInvariant(), FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = _theme.AccentPrimaryBrush, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
                     };
@@ -1223,8 +1312,8 @@ public sealed partial class MainWindow
                         iconContainer.Children.Add(new Image
                         {
                             Source = cachedImage,
-                            Width = 28,
-                            Height = 28,
+                            Width = 24,
+                            Height = 24,
                             HorizontalAlignment = HorizontalAlignment.Center,
                             VerticalAlignment = VerticalAlignment.Center
                         });
@@ -1233,13 +1322,13 @@ public sealed partial class MainWindow
                     {
                         iconContainer.Children.Add(monogram);
                         var capturedTabId = tab.Id;
-                        _ = AttachFaviconAsync(iconContainer, entry.Url, expectedKey, () => _session.ActiveTab.Id == capturedTabId && _session.ActiveTab.Url == Navigation.NewTab, 1.0, 28);
+                        _ = AttachFaviconAsync(iconContainer, entry.Url, expectedKey, () => _session.ActiveTab.Id == capturedTabId && _session.ActiveTab.Url == Navigation.NewTab, 1.0, 24);
                     }
-                    var content = new StackPanel { Spacing = 7, HorizontalAlignment = HorizontalAlignment.Center, Children = { iconContainer, new TextBlock { Text = label, FontSize = 11, Foreground = _theme.TextSecondaryBrush, TextTrimming = TextTrimming.CharacterEllipsis, HorizontalAlignment = HorizontalAlignment.Center } } };
-                    site = new Button { Content = content, Height = 76, Padding = new(8), CornerRadius = new(SlateTheme.RadiusMedium), Background = _theme.SurfaceRaisedBrush, BorderBrush = _theme.DividerBrush, BorderThickness = new(1), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Center };
+                    var content = new StackPanel { Spacing = 5, HorizontalAlignment = HorizontalAlignment.Center, Children = { iconContainer, new TextBlock { Text = label, FontSize = 11, Foreground = _theme.TextSecondaryBrush, TextTrimming = TextTrimming.CharacterEllipsis, HorizontalAlignment = HorizontalAlignment.Center } } };
+                    site = new Button { Content = content, Height = 64, Padding = new(8), CornerRadius = new(SlateTheme.RadiusMedium), Background = _theme.SurfaceBaseBrush, BorderBrush = _theme.DividerBrush, BorderThickness = new(0), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Center };
                     AutomationProperties.SetName(site, "Open " + label);
                     site.PointerEntered += (_, _) => site.Background = _theme.SurfaceInteractiveHoverBrush;
-                    site.PointerExited += (_, _) => site.Background = _theme.SurfaceRaisedBrush;
+                    site.PointerExited += (_, _) => site.Background = _theme.SurfaceBaseBrush;
                     site.Click += async (_, _) => { _focusedTabId = tab.Id; await RunAsync(() => NavigateAsync(entry.Url)); };
                 }
                 Grid.SetColumn(site, i); sites.Children.Add(site);
@@ -1251,15 +1340,15 @@ public sealed partial class MainWindow
         footer.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         if (tab.IsTemporary)
-            footer.Children.Add(new TextBlock { Text = "TEMPORARY TAB", FontSize = 9, CharacterSpacing = 140, Foreground = _theme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center });
-        var shortcuts = new TextBlock { Text = "Ctrl+L  Address     Ctrl+K  Commands", FontSize = 10, Foreground = _theme.TextMutedBrush };
+            footer.Children.Add(new TextBlock { Text = "Temporary tab", FontSize = 11, Foreground = _theme.TextMutedBrush, VerticalAlignment = VerticalAlignment.Center });
+        var shortcuts = new TextBlock { Text = "Ctrl+L  Address     Ctrl+K  Commands", FontSize = 11, Foreground = _theme.TextMutedBrush };
         Grid.SetColumn(shortcuts, 1); footer.Children.Add(shortcuts);
         grid.Children.Add(footer); return grid;
     }
 
     internal Button BuildNewTabTile()
     {
-        var iconContainer = new Grid { Width = 28, Height = 28, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var iconContainer = new Grid { Width = 24, Height = 24, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         iconContainer.Children.Add(new FontIcon
         {
             Glyph = "\uE710",
@@ -1271,7 +1360,7 @@ public sealed partial class MainWindow
         });
         var content = new StackPanel
         {
-            Spacing = 7,
+            Spacing = 5,
             HorizontalAlignment = HorizontalAlignment.Center,
             Children =
             {
@@ -1289,18 +1378,18 @@ public sealed partial class MainWindow
         var site = new Button
         {
             Content = content,
-            Height = 76,
+            Height = 64,
             Padding = new(8),
             CornerRadius = new(SlateTheme.RadiusMedium),
-            Background = _theme.SurfaceRaisedBrush,
+            Background = _theme.SurfaceBaseBrush,
             BorderBrush = _theme.DividerBrush,
-            BorderThickness = new(1),
+            BorderThickness = new(0),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Center
         };
         AutomationProperties.SetName(site, "New tab");
         site.PointerEntered += (_, _) => site.Background = _theme.SurfaceInteractiveHoverBrush;
-        site.PointerExited += (_, _) => site.Background = _theme.SurfaceRaisedBrush;
+        site.PointerExited += (_, _) => site.Background = _theme.SurfaceBaseBrush;
         site.Click += async (_, _) => await RunAsync(() => NewTabAsync());
         return site;
     }

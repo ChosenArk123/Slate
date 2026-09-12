@@ -102,6 +102,7 @@ public sealed class BrowserSettings
     public string? DownloadPath { get; set; }
     public bool AskDownloadLocation { get; set; }
     public bool AutofillPasswords { get; set; } = true;
+    public bool OfferToSavePasswords { get; set; } = true;
     public bool HardenedIsolation { get; set; }
 
     public static int SleepOptionToMinutes(string? option)

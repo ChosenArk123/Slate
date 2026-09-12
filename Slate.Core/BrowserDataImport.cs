@@ -43,7 +43,11 @@ public sealed class BrowserDataImportPackage(
     IReadOnlyList<ImportedCredential> credentials,
     int rejectedRows,
     int duplicateRows,
-    int conflictingRows) : IDisposable
+    int conflictingRows,
+    int invalidUrlRows = 0,
+    int missingUsernameRows = 0,
+    int missingPasswordRows = 0,
+    int unsupportedRows = 0) : IDisposable
 {
     public string SourceName { get; } = sourceName;
     public BrowserDataKinds AvailableKinds { get; } = availableKinds;
@@ -51,6 +55,11 @@ public sealed class BrowserDataImportPackage(
     public int RejectedRows { get; } = rejectedRows;
     public int DuplicateRows { get; } = duplicateRows;
     public int ConflictingRows { get; } = conflictingRows;
+    public int InvalidUrlRows { get; } = invalidUrlRows;
+    public int MissingUsernameRows { get; } = missingUsernameRows;
+    public int MissingPasswordRows { get; } = missingPasswordRows;
+    public int UnsupportedRows { get; } = unsupportedRows;
+    public int TotalRows => Credentials.Count + RejectedRows + DuplicateRows + ConflictingRows;
     public void Dispose()
     {
         foreach (var credential in Credentials) credential.ClearSecret();
@@ -457,17 +466,17 @@ public sealed class BrowserPasswordCsvParser : IBrowserDataImportFormat, IBrowse
 {
     private static readonly HashSet<string> UrlAliases = new(StringComparer.Ordinal)
     {
-        "url", "origin", "website", "web site", "login url", "page url", "action url", "host"
+        "url", "origin", "website", "web site", "login url", "login_uri", "page url", "action url", "host"
     };
 
     private static readonly HashSet<string> UsernameAliases = new(StringComparer.Ordinal)
     {
-        "username", "login", "user", "email", "account", "user name"
+        "username", "username_value", "login", "user", "email", "account", "user name"
     };
 
     private static readonly HashSet<string> PasswordAliases = new(StringComparer.Ordinal)
     {
-        "password", "pass", "pwd", "secret"
+        "password", "password_value", "pass", "pwd", "secret"
     };
 
     public static readonly BrowserDataImportDescriptor DefaultDescriptor = new(
@@ -549,23 +558,27 @@ public sealed class BrowserPasswordCsvParser : IBrowserDataImportFormat, IBrowse
         var accepted = new Dictionary<(string Origin, string Username), ImportedCredential>();
         var conflicted = new HashSet<(string Origin, string Username)>();
         int rejected = 0, duplicates = 0, conflicts = 0;
+        int invalidUrls = 0, missingUsernames = 0, missingPasswords = 0, unsupported = 0;
 
         for (int index = 0; index < rows.Count; index++)
         {
             var row = rows[index];
-            if (row.Count <= highestRequired) { rejected++; continue; }
+            if (row.Count <= highestRequired) { rejected++; unsupported++; continue; }
             string url = row[urlColumn];
             string username = row[usernameColumn];
             string password = row[passwordColumn];
-            if (url.Length == 0 || url.Length > BrowserDataImportService.MaximumUrlCharacters ||
+            if (string.IsNullOrWhiteSpace(url)) { rejected++; invalidUrls++; continue; }
+            if (username.Length == 0) missingUsernames++;
+            if (password.Length == 0) { rejected++; missingPasswords++; continue; }
+            if (url.Length > BrowserDataImportService.MaximumUrlCharacters ||
                 username.Length > BrowserDataImportService.MaximumUsernameCharacters || username.Any(char.IsControl) ||
-                password.Length == 0 || password.Length > BrowserDataImportService.MaximumPasswordCharacters)
+                password.Length > BrowserDataImportService.MaximumPasswordCharacters)
             {
-                rejected++;
+                rejected++; unsupported++;
                 continue;
             }
             string? origin = CredentialOrigin.Normalize(url);
-            if (origin is null) { rejected++; continue; }
+            if (origin is null) { rejected++; invalidUrls++; continue; }
 
             var key = (origin, username);
             if (conflicted.Contains(key)) { conflicts++; continue; }
@@ -584,9 +597,64 @@ public sealed class BrowserPasswordCsvParser : IBrowserDataImportFormat, IBrowse
             accepted.Add(key, new ImportedCredential(origin, username, password, index + 2));
         }
 
-        return new BrowserDataImportPackage(source, BrowserDataKinds.Passwords, accepted.Values.ToArray(), rejected, duplicates, conflicts);
+        return new BrowserDataImportPackage(source, BrowserDataKinds.Passwords, accepted.Values.ToArray(), rejected, duplicates, conflicts,
+            invalidUrls, missingUsernames, missingPasswords, unsupported);
     }
 }
 
+public sealed record CredentialImportReview(
+    int Total, int ReadyToImport, int Duplicates, int Conflicts, int Invalid,
+    int InvalidUrls, int MissingUsernames, int MissingPasswords, int UnsupportedRows);
 
+/// <summary>Reviews and applies password imports through the ordinary revision-bound vault path.</summary>
+public sealed class CredentialImportCoordinator(CredentialVault vault)
+{
+    public async Task<CredentialImportReview> ReviewAsync(BrowserDataImportPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        var decisions = await vault.AssessBatchAsync(package.Credentials.Select(item =>
+            new CredentialAssessmentRequest(item.Origin, item.Username, item.Password))).ConfigureAwait(false);
+        return new CredentialImportReview(
+            package.TotalRows,
+            decisions.Count(decision => decision.Change == CredentialChange.Save),
+            package.DuplicateRows + decisions.Count(decision => decision.Change == CredentialChange.Unchanged),
+            package.ConflictingRows + decisions.Count(decision => decision.Change == CredentialChange.Update),
+            package.RejectedRows,
+            package.InvalidUrlRows,
+            package.MissingUsernameRows,
+            package.MissingPasswordRows,
+            package.UnsupportedRows);
+    }
+
+    public async Task<BrowserDataImportResult> ImportAsync(BrowserDataImportPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        int imported = 0, duplicates = package.DuplicateRows, conflicts = package.ConflictingRows, failed = 0;
+        foreach (var item in package.Credentials)
+        {
+            try
+            {
+                var decision = await vault.AssessAsync(item.Origin, item.Username, item.Password).ConfigureAwait(false);
+                if (decision.Change == CredentialChange.Unchanged) { duplicates++; continue; }
+                if (decision.Change == CredentialChange.Update) { conflicts++; continue; }
+                try
+                {
+                    await vault.SaveAsync(item.Origin, item.Username, item.Password, expected: null).ConfigureAwait(false);
+                    imported++;
+                }
+                catch (CredentialConflictException)
+                {
+                    var raced = await vault.AssessAsync(item.Origin, item.Username, item.Password).ConfigureAwait(false);
+                    if (raced.Change == CredentialChange.Unchanged) duplicates++;
+                    else if (raced.Change == CredentialChange.Update) conflicts++;
+                    else failed++;
+                }
+            }
+            catch (CredentialConflictException) { conflicts++; }
+            catch (CredentialVaultException) { failed++; }
+        }
+        return new BrowserDataImportResult(package.TotalRows, imported, 0, duplicates, conflicts,
+            package.RejectedRows, failed, BrowserDataKinds.Passwords, package.SourceName);
+    }
+}
 

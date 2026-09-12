@@ -56,10 +56,13 @@ public sealed class BrowserEngineService
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        // Enforce strict security baseline
+        // Enforce strict security baseline: host objects and web messaging disabled
         settings.AreHostObjectsAllowed = false;
         settings.IsWebMessageEnabled = false;
+        // Edge's internal password autosave is disabled so Slate owns credential storage exclusively
         settings.IsPasswordAutosaveEnabled = false;
+        // General autofill stores non-password form data (for example addresses) profile-wide.
+        // It is not the WebAuthn API and is not needed for navigator.credentials.create/get.
         settings.IsGeneralAutofillEnabled = false;
         // In hardened isolation mode, developer tools are strictly blocked.
         settings.AreDevToolsEnabled = developerToolsEnabled && !_hardenedIsolation;

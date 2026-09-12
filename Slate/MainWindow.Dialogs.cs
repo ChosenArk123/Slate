@@ -36,7 +36,7 @@ public sealed partial class MainWindow
         {
             XamlRoot = _root.XamlRoot, RequestedTheme = _root.RequestedTheme,
             Title = title, Content = content, CloseButtonText = close,
-            DefaultButton = ContentDialogButton.Close
+            DefaultButton = ContentDialogButton.Close, FontSize = 13
         };
         dialog.Opened += (_, _) =>
         {
@@ -60,7 +60,7 @@ public sealed partial class MainWindow
         if (_activeDialog is not null) return;
         var input = new TextBox
         {
-            PlaceholderText = "Search tabs, history, or the web…",
+            PlaceholderText = "Search commands, tabs, history, or the web…",
             Text = query,
             FontSize = 14,
             Padding = new(10, 6, 10, 6),
@@ -86,8 +86,8 @@ public sealed partial class MainWindow
         list.Resources["ListViewItemBackgroundSelectedPressed"] = _theme.SurfacePressedBrush;
         list.Resources["ListViewItemBackgroundPointerOver"] = _theme.SurfaceInteractiveHoverBrush;
         AutomationProperties.SetName(list, "Command results");
-        var panel = new StackPanel { MaxWidth = 540, Spacing = 8, Children = { input, list,
-            new TextBlock { Text = "↑ ↓  Navigate     Enter  Open     Esc  Dismiss", FontSize = 11, Opacity = .5 } } };
+        var panel = new StackPanel { Width = 500, MaxWidth = 540, Spacing = 8, Children = { input, list,
+            new TextBlock { Text = "↑ ↓  Navigate     Enter  Open     Esc  Dismiss", FontSize = 12, Foreground = _theme.TextSecondaryBrush } } };
         var dialog = Dialog("Go anywhere", panel, "");
         dialog.CloseButtonText = "";
         dialog.PrimaryButtonText = "";
@@ -101,12 +101,12 @@ public sealed partial class MainWindow
             list.Items.Clear();
             foreach (var result in GetPaletteItems(input.Text).Take(24))
             {
-                var row = new Grid { Tag = result, ColumnSpacing = 14, Padding = new(2, 5, 2, 5) };
+                var row = new Grid { Tag = result, ColumnSpacing = 10, Padding = new(2, 3, 2, 3) };
                 row.ColumnDefinitions.Add(new() { Width = new(20) }); row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
                 row.Children.Add(Icon(result.Glyph, 16));
-                var text = new StackPanel { Spacing = 3, Children = {
+                var text = new StackPanel { Spacing = 2, Children = {
                     new TextBlock { Text = result.Title, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis },
-                    new TextBlock { Text = result.Detail, FontSize = 11, Opacity = .5, TextTrimming = TextTrimming.CharacterEllipsis } } };
+                    new TextBlock { Text = result.Detail, FontSize = 12, Foreground = _theme.TextSecondaryBrush, TextTrimming = TextTrimming.CharacterEllipsis } } };
                 Grid.SetColumn(text, 1); row.Children.Add(text);
                 var item = new ListViewItem { Content = row, Tag = result, HorizontalContentAlignment = HorizontalAlignment.Stretch, CornerRadius = new(SlateTheme.RadiusSmall) };
                 AutomationProperties.SetName(item, result.Title + ", " + result.Detail); list.Items.Add(item);
@@ -248,7 +248,7 @@ public sealed partial class MainWindow
 
                 var textStack = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
                 textStack.Children.Add(new TextBlock { Text = entry.Title, TextTrimming = TextTrimming.CharacterEllipsis });
-                textStack.Children.Add(new TextBlock { Text = entry.VisitedAt.ToLocalTime().ToString("MMM d, HH:mm") + " · " + entry.Url, FontSize = 11, Opacity = .55, TextTrimming = TextTrimming.CharacterEllipsis });
+                textStack.Children.Add(new TextBlock { Text = entry.VisitedAt.ToLocalTime().ToString("MMM d, HH:mm") + " · " + entry.Url, FontSize = 12, Foreground = _theme.TextSecondaryBrush, TextTrimming = TextTrimming.CharacterEllipsis });
                 rowGrid.Children.Add(textStack);
 
                 var deleteBtn = IconButton("\uE711", "Delete from history", () =>
@@ -324,7 +324,7 @@ public sealed partial class MainWindow
 
                 var textStack = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
                 textStack.Children.Add(new TextBlock { Text = bookmark.Title, TextTrimming = TextTrimming.CharacterEllipsis });
-                textStack.Children.Add(new TextBlock { Text = bookmark.Url, FontSize = 11, Opacity = .55, TextTrimming = TextTrimming.CharacterEllipsis });
+                textStack.Children.Add(new TextBlock { Text = bookmark.Url, FontSize = 12, Foreground = _theme.TextSecondaryBrush, TextTrimming = TextTrimming.CharacterEllipsis });
                 Grid.SetColumn(textStack, 1);
                 rowGrid.Children.Add(textStack);
 
@@ -375,12 +375,12 @@ public sealed partial class MainWindow
             await NavigateAsync(selected);
     }
 
-    private static ListViewItem TextRow(string title, string detail, object tag) => new()
+    private ListViewItem TextRow(string title, string detail, object tag) => new()
     {
         Tag = tag, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-        Content = new StackPanel { Spacing = 4, Padding = new(0, 5, 0, 5), Children = {
+        Content = new StackPanel { Spacing = 2, Padding = new(0, 3, 0, 3), Children = {
             new TextBlock { Text = title, TextTrimming = TextTrimming.CharacterEllipsis },
-            new TextBlock { Text = detail, FontSize = 11, Opacity = .55, TextTrimming = TextTrimming.CharacterEllipsis } } }
+            new TextBlock { Text = detail, FontSize = 12, Foreground = _theme.TextSecondaryBrush, TextTrimming = TextTrimming.CharacterEllipsis } } }
     };
 
     private async Task ShowRecentlyClosedAsync()
@@ -398,10 +398,10 @@ public sealed partial class MainWindow
         var workspace = _session.ActiveWorkspace;
         var name = new TextBox { Header = "Current workspace", Text = workspace.Name, MaxLength = 40 };
         var newName = new TextBox { Header = "Create a workspace", PlaceholderText = "e.g. Research", MaxLength = 40 };
-        var panel = new StackPanel { Width = 420, Spacing = 20, Children = { name, newName } };
+        var panel = new StackPanel { Width = 420, Spacing = 12, Children = { name, newName } };
         var remove = new Button { Content = "Remove current workspace", IsEnabled = _session.State.Workspaces.Count > 1 };
         panel.Children.Add(remove);
-        panel.Children.Add(new TextBlock { Text = "Removing a workspace moves its tabs to another space. Workspaces share cookies and site data.", FontSize = 12, TextWrapping = TextWrapping.Wrap, Opacity = .55 });
+        panel.Children.Add(new TextBlock { Text = "Removing a workspace moves its tabs to another space. Workspaces share cookies and site data.", FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = _theme.TextSecondaryBrush });
         var dialog = Dialog("Your spaces", panel, "Cancel"); dialog.PrimaryButtonText = "Save"; bool removed = false;
         remove.Click += (_, _) => { removed = true; dialog.Hide(); };
         var result = await ShowDialogAsync(dialog);
@@ -418,6 +418,10 @@ public sealed partial class MainWindow
     private async Task ShowSettingsAsync()
     {
         var settings = _session.State.Settings;
+        bool vaultAvailable = true;
+        int savedCredentialCount = 0;
+        try { savedCredentialCount = (await _credentialVault.ListAsync()).Count; }
+        catch { vaultAvailable = false; }
 
         // Section 1: Appearance
         var theme = new ComboBox
@@ -572,7 +576,7 @@ public sealed partial class MainWindow
         AutomationProperties.SetName(sleep, "Sleep inactive tabs");
         AutomationProperties.SetAutomationId(sleep, "SettingsTabSleepComboBox");
 
-        // Section 4: Privacy / Security
+        // Section 4: Privacy / Data
         var hardenedIsolationToggle = new ToggleSwitch
         {
             Header = "Hardened isolation (JIT-less mode)",
@@ -591,7 +595,42 @@ public sealed partial class MainWindow
         AutomationProperties.SetName(clearData, "Clear browsing data");
         AutomationProperties.SetAutomationId(clearData, "SettingsClearBrowsingDataButton");
 
-        // Section 5: Downloads
+        // Section 5: Passwords
+        var autofillPasswords = new ToggleSwitch { IsOn = settings.AutofillPasswords };
+        AutomationProperties.SetName(autofillPasswords, "Autofill saved passwords");
+        AutomationProperties.SetAutomationId(autofillPasswords, "SettingsAutofillPasswordsToggle");
+
+        var offerToSavePasswords = new ToggleSwitch { IsOn = settings.OfferToSavePasswords };
+        AutomationProperties.SetName(offerToSavePasswords, "Offer to save and update passwords");
+        AutomationProperties.SetAutomationId(offerToSavePasswords, "SettingsOfferToSavePasswordsToggle");
+
+        var managePasswords = new Button
+        {
+            Content = "Manage saved passwords",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Width = 248,
+            HorizontalContentAlignment = HorizontalAlignment.Left
+        };
+        AutomationProperties.SetName(managePasswords, "Manage saved passwords");
+        AutomationProperties.SetAutomationId(managePasswords, "SettingsManagePasswordsButton");
+
+        var importPasswords = new Button
+        {
+            Content = "Import passwords from CSV…",
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Width = 248,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            IsEnabled = vaultAvailable && !_credentialVault.RecoveredFromBackup
+        };
+        AutomationProperties.SetName(importPasswords, "Import passwords from CSV");
+        AutomationProperties.SetAutomationId(importPasswords, "SettingsImportPasswordsButton");
+
+        string vaultStatus = !vaultAvailable ? "Password vault unavailable. Its files have been preserved."
+            : _credentialVault.RecoveredFromBackup ? "Recovered vault backup is open read only. Import and deletion are unavailable."
+            : savedCredentialCount == 0 ? "No saved passwords yet."
+            : savedCredentialCount == 1 ? "1 saved account." : $"{savedCredentialCount:N0} saved accounts.";
+
+        // Section 6: Downloads
         var downloadLocation = new TextBox
         {
             Header = "Download location",
@@ -655,7 +694,7 @@ public sealed partial class MainWindow
         AutomationProperties.SetName(askDownload, "Ask where to save each file before downloading");
         AutomationProperties.SetAutomationId(askDownload, "SettingsAskDownloadToggle");
 
-        // Section 6: Profile
+        // Section 7: Profile
         var profile = new Button
         {
             Content = "Open profile folder",
@@ -675,7 +714,7 @@ public sealed partial class MainWindow
             else Notify("The profile directory is invalid.");
         };
 
-        // Section 7: About
+        // Section 8: About
         var appVersion = typeof(MainWindow).Assembly.GetName().Version;
         var appVersionString = appVersion is not null ? $"{appVersion.Major}.{appVersion.Minor}" : "0.2";
         var fullVersionString = appVersion?.ToString() ?? "0.2.0.0";
@@ -718,7 +757,7 @@ public sealed partial class MainWindow
                 FontSize = 12,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 Foreground = _theme.TextSecondaryBrush,
-                CharacterSpacing = 30,
+                CharacterSpacing = 0,
                 Margin = new(0, 2, 0, 2)
             };
             AutomationProperties.SetName(heading, title + " settings");
@@ -727,10 +766,13 @@ public sealed partial class MainWindow
             foreach (var control in controls) section.Children.Add(control);
             return section;
         }
-        TextBlock Note(string text) => new() { Text = text, FontSize = 11, Foreground = _theme.TextMutedBrush, TextWrapping = TextWrapping.Wrap, Margin = new(0, 2, 0, 0) };
+        TextBlock Note(string text) => new() { Text = text, FontSize = 12, Foreground = _theme.TextSecondaryBrush, TextWrapping = TextWrapping.Wrap, Margin = new(0, 2, 0, 0) };
         Grid ToggleRow(string label, ToggleSwitch toggle)
         {
             toggle.Header = null;
+            toggle.OnContent = "";
+            toggle.OffContent = "";
+            toggle.MinWidth = 0;
             toggle.HorizontalAlignment = HorizontalAlignment.Right;
             toggle.VerticalAlignment = VerticalAlignment.Center;
             var row = new Grid { MinHeight = 32, ColumnSpacing = 12 };
@@ -756,10 +798,14 @@ public sealed partial class MainWindow
         restore.TabIndex = 9;
         sleep.TabIndex = 10;
         clearData.TabIndex = 11;
-        downloadLocation.TabIndex = 12;
-        chooseFolder.TabIndex = 13;
-        askDownload.TabIndex = 14;
-        profile.TabIndex = 15;
+        autofillPasswords.TabIndex = 12;
+        offerToSavePasswords.TabIndex = 13;
+        managePasswords.TabIndex = 14;
+        importPasswords.TabIndex = 15;
+        downloadLocation.TabIndex = 16;
+        chooseFolder.TabIndex = 17;
+        askDownload.TabIndex = 18;
+        profile.TabIndex = 19;
 
         var colors = new Grid { ColumnSpacing = 12 };
         colors.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
@@ -776,7 +822,11 @@ public sealed partial class MainWindow
                 Section("Appearance", colors, ToggleRow("Reduce motion", motion), ToggleRow("Show bookmarks bar", bookmarksBarToggle)),
                 Section("Browsing", engine, startupBehavior, defaultZoom, ToggleRow("Developer tools (F12)", devTools), defaultBrowserButton, Note("Configure Slate as your default web browser in Windows Settings.")),
                 Section("Tabs", ToggleRow("Restore tabs on startup", restore), sleep, Note("Sleeping preserves page state while freeing memory. Closed tabs restore their last URL.")),
-                Section("Privacy / Security", ToggleRow("Hardened isolation (JIT-less mode)", hardenedIsolationToggle), Note("JIT-less mode neutralizes ~60% of zero-day memory bugs. Keep off for full hardware VP9/AV1 decoding (YouTube 4K) and responsive web apps."), Note("Temporary tabs share regular cookies; InPrivate tabs use isolated ephemeral storage."), clearData),
+                Section("Privacy / Data", ToggleRow("Hardened isolation (JIT-less mode)", hardenedIsolationToggle), Note("JIT-less mode reduces exposure to browser engine memory bugs. Keep it off for full media performance and the most responsive web apps."), Note("Temporary tabs share regular cookies; InPrivate tabs use isolated ephemeral storage."), clearData),
+                Section("Passwords", ToggleRow("Autofill saved passwords", autofillPasswords), ToggleRow("Offer to save and update passwords", offerToSavePasswords),
+                    Note("Slate owns password storage. Saved logins are matched only to the exact normalized site origin; multiple accounts are never chosen automatically."),
+                    managePasswords, importPasswords, Note(vaultStatus),
+                    Note("Passkeys are handled by Windows and WebView2. Slate does not store or manage passkeys.")),
                 Section("Downloads", downloadGrid, ToggleRow("Ask where to save each file before downloading", askDownload)),
                 Section("Profile", profile, Note("Slate isolates browsing data locally. Cloud sync is disabled for privacy.")),
                 Section("About", aboutTitle, assemblyVersionNote, webViewVersionNote, architectureNote, Note("Native Windows browser · .NET 8 · Microsoft WebView2"))
@@ -823,11 +873,15 @@ public sealed partial class MainWindow
             theme.Focus(FocusState.Programmatic);
         };
 
-        bool clearRequested = false;
+        bool clearRequested = false, managePasswordsRequested = false, importPasswordsRequested = false;
         clearData.Click += (_, _) => { clearRequested = true; dialog.Hide(); };
+        managePasswords.Click += (_, _) => { managePasswordsRequested = true; dialog.Hide(); };
+        importPasswords.Click += (_, _) => { importPasswordsRequested = true; dialog.Hide(); };
 
         var result = await ShowDialogAsync(dialog);
         if (clearRequested) { await ClearAllBrowsingDataAsync(); return; }
+        if (managePasswordsRequested) { await ShowPasswordManagerAsync(); return; }
+        if (importPasswordsRequested) { await ShowPasswordImportAsync(); return; }
         if (result != ContentDialogResult.Primary) return;
 
         settings.Theme = theme.SelectedItem as string ?? "System";
@@ -837,6 +891,13 @@ public sealed partial class MainWindow
         settings.DeveloperToolsEnabled = devTools.IsOn;
         settings.HardenedIsolation = hardenedIsolationToggle.IsOn;
         settings.ShowBookmarksBar = bookmarksBarToggle.IsOn;
+        settings.AutofillPasswords = autofillPasswords.IsOn;
+        settings.OfferToSavePasswords = offerToSavePasswords.IsOn;
+        if (!settings.OfferToSavePasswords)
+        {
+            foreach (var controller in _runtimes.Values.Select(runtime => runtime.Passwords).OfType<PasswordController>()) controller.Dismiss();
+            UpdatePasswordOffer();
+        }
 
         var customPath = downloadLocation.Text.Trim();
         string safePath;
@@ -899,7 +960,7 @@ public sealed partial class MainWindow
         var chkDownloads = new CheckBox { Content = "Download history", IsChecked = true };
         var chkCookies = new CheckBox { Content = "Cookies and other site data", IsChecked = true };
         var chkCache = new CheckBox { Content = "Cached images and files", IsChecked = true };
-        var chkPasswords = new CheckBox { Content = "Passwords and autofill data", IsChecked = false };
+        var chkPasswords = new CheckBox { Content = "Web form autofill data", IsChecked = false };
 
         var panel = new StackPanel
         {
@@ -914,7 +975,7 @@ public sealed partial class MainWindow
                 chkCookies,
                 chkCache,
                 chkPasswords,
-                new TextBlock { Text = "Open tabs and downloaded files are kept.", FontSize = 11, Opacity = .6, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) }
+                new TextBlock { Text = "Open tabs, downloaded files, and passwords in Slate's vault are kept. Manage saved passwords in Settings > Passwords.", FontSize = 12, Foreground = _theme.TextSecondaryBrush, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) }
             }
         };
 
@@ -1032,10 +1093,10 @@ public sealed partial class MainWindow
     private async Task<(bool Allow, bool Remember)> RequestPermissionAsync(string origin, string permission, string description)
     {
         var remember = new CheckBox { Content = "Remember for this site", IsChecked = false };
-        var panel = new StackPanel { Width = 420, Spacing = 18, Children = {
+        var panel = new StackPanel { Width = 420, Spacing = 12, Children = {
             new TextBlock { Text = origin, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap },
             new TextBlock { Text = "This site is asking to use: " + permission, TextWrapping = TextWrapping.Wrap },
-            new TextBlock { Text = description, TextWrapping = TextWrapping.Wrap, Opacity = .65 }, remember } };
+            new TextBlock { Text = description, TextWrapping = TextWrapping.Wrap, Foreground = _theme.TextSecondaryBrush }, remember } };
         var dialog = Dialog("Site permission", panel, "Block"); dialog.PrimaryButtonText = "Allow";
         return (await ShowDialogAsync(dialog) == ContentDialogResult.Primary, remember.IsChecked == true);
     }
@@ -1047,7 +1108,7 @@ public sealed partial class MainWindow
         {
             var filePanel = new StackPanel { Width = 430, Spacing = 10, Children = {
                 new TextBlock { Text = "Local File", FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
-                new TextBlock { Text = "This file is loaded from your local computer. Local files cannot access internet services or other sites.", TextWrapping = TextWrapping.Wrap, Opacity = .7 },
+                new TextBlock { Text = "This file is loaded from your local computer. Local files cannot access internet services or other sites.", TextWrapping = TextWrapping.Wrap, Foreground = _theme.TextSecondaryBrush },
                 new TextBlock { Text = new Uri(url).LocalPath, FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }
             } };
             var fileDialog = Dialog("File information", filePanel);
@@ -1058,7 +1119,7 @@ public sealed partial class MainWindow
         {
             var srcPanel = new StackPanel { Width = 430, Spacing = 10, Children = {
                 new TextBlock { Text = "Page Source", FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
-                new TextBlock { Text = "This tab is displaying the sandboxed, script-disabled source code of a document.", TextWrapping = TextWrapping.Wrap, Opacity = .7 },
+                new TextBlock { Text = "This tab is displaying the sandboxed, script-disabled source code of a document.", TextWrapping = TextWrapping.Wrap, Foreground = _theme.TextSecondaryBrush },
                 new TextBlock { Text = url["view-source:".Length..], FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true }
             } };
             var srcDialog = Dialog("Source information", srcPanel);
@@ -1076,7 +1137,7 @@ public sealed partial class MainWindow
             "This page uses an unencrypted HTTP connection.";
         var panel = new StackPanel { Width = 430, Spacing = 14, Children = {
             new TextBlock { Text = origin, FontSize = 17, TextWrapping = TextWrapping.Wrap },
-            new TextBlock { Text = connection, TextWrapping = TextWrapping.Wrap, Opacity = .65 } } };
+            new TextBlock { Text = connection, TextWrapping = TextWrapping.Wrap, Foreground = _theme.TextSecondaryBrush } } };
         var dialog = Dialog("Site information", panel);
         bool openCertViewer = false;
         if (url.StartsWith("https:", StringComparison.OrdinalIgnoreCase) || runtime?.CertificateError == true || runtime?.LastCertificate is not null)
@@ -1085,7 +1146,7 @@ public sealed partial class MainWindow
             viewCertBtn.Click += (_, _) => { openCertViewer = true; dialog.Hide(); };
             panel.Children.Add(viewCertBtn);
         }
-        if (permissions.Count == 0) panel.Children.Add(new TextBlock { Text = "No remembered permissions for this site.", Opacity = .6 });
+        if (permissions.Count == 0) panel.Children.Add(new TextBlock { Text = "No remembered permissions for this site.", Foreground = _theme.TextSecondaryBrush });
         foreach (var permission in permissions) panel.Children.Add(new TextBlock { Text = permission.PermissionKind + " · " + permission.PermissionState });
         if (permissions.Count > 0) dialog.PrimaryButtonText = "Reset permissions";
         if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
@@ -1140,7 +1201,7 @@ public sealed partial class MainWindow
             void AddRow(string label, string value)
             {
                 var row = new StackPanel { Spacing = 2 };
-                row.Children.Add(new TextBlock { Text = label, FontSize = 11, Opacity = 0.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+                row.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = _theme.TextSecondaryBrush, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
                 row.Children.Add(new TextBlock { Text = value, FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
                 panel.Children.Add(row);
             }
@@ -1166,7 +1227,7 @@ public sealed partial class MainWindow
             void AddRow(string label, string value)
             {
                 var row = new StackPanel { Spacing = 2 };
-                row.Children.Add(new TextBlock { Text = label, FontSize = 11, Opacity = 0.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+                row.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = _theme.TextSecondaryBrush, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
                 row.Children.Add(new TextBlock { Text = value, FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
                 panel.Children.Add(row);
             }
@@ -1190,7 +1251,7 @@ public sealed partial class MainWindow
             {
                 Text = certErrorDetail ?? "No certificate information available for this address.",
                 TextWrapping = TextWrapping.Wrap,
-                Opacity = 0.7
+                Foreground = _theme.TextSecondaryBrush
             });
         }
 
@@ -1233,12 +1294,12 @@ public sealed partial class MainWindow
 
     private async Task ShowDownloadsAsync()
     {
-        var rows = new StackPanel { Width = 520, Spacing = 16 };
+        var rows = new StackPanel { Width = 520, Spacing = 12 };
         var updates = new List<Action>();
         foreach (var entry in _session.State.Downloads.Take(100))
         {
             var title = new TextBlock { Text = entry.FileName, TextTrimming = TextTrimming.CharacterEllipsis };
-            var state = new TextBlock { FontSize = 11, Opacity = .6 };
+            var state = new TextBlock { FontSize = 12, Foreground = _theme.TextSecondaryBrush };
             var progress = new ProgressBar { Height = 3, Maximum = 100 };
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
             var open = IconButton("\uE8E5", "Open file", () =>
@@ -1278,7 +1339,7 @@ public sealed partial class MainWindow
                 cancel.IsEnabled = op is not null && entry.Status is "Downloading" or "Paused";
             });
         }
-        if (updates.Count == 0) rows.Children.Add(new TextBlock { Text = "Your downloads will appear here.", Opacity = .6, Margin = new(0, 20, 0, 20) });
+        if (updates.Count == 0) rows.Children.Add(new TextBlock { Text = "Your downloads will appear here.", Foreground = _theme.TextSecondaryBrush, Margin = new(0, 20, 0, 20) });
         var dialog = Dialog("Downloads", new ScrollViewer { Content = rows, MaxHeight = 430 });
         dialog.PrimaryButtonText = "Clear finished";
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };

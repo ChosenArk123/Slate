@@ -7,9 +7,9 @@ namespace Slate;
 
 internal static class SlateTheme
 {
-    internal const double RadiusSmall = 6;
-    internal const double RadiusMedium = 10;
-    internal const double RadiusLarge = 14;
+    internal const double RadiusSmall = 4;
+    internal const double RadiusMedium = 8;
+    internal const double RadiusLarge = 10;
 
     internal static readonly string[] AccentNames = ["Slate", "Cobalt", "Moss", "Plum", "Clay", "Amber", "System"];
 
@@ -121,14 +121,14 @@ internal static class SlateTheme
 
     private static NeutralPalette GetNeutralReference(bool dark) => dark
         ? new(
-            Rgb(20, 22, 26), Argb(238, 26, 28, 33), Rgb(23, 25, 30),
-            Rgb(33, 36, 42), Rgb(39, 43, 50), Rgb(48, 53, 62), Rgb(56, 61, 71),
+            Rgb(23, 24, 27), Rgb(27, 28, 31), Rgb(25, 26, 29),
+            Rgb(32, 34, 38), Rgb(37, 39, 44), Rgb(45, 48, 54), Rgb(40, 43, 49),
             Rgb(54, 58, 66), Rgb(74, 79, 89),
             Rgb(244, 245, 247), Rgb(176, 182, 192), Rgb(126, 132, 140),
             Rgb(91, 112, 151))
         : new(
-            Rgb(246, 247, 249), Argb(242, 239, 241, 244), Rgb(237, 239, 242),
-            Rgb(230, 233, 238), Rgb(235, 238, 243), Rgb(224, 228, 235), Rgb(213, 218, 226),
+            Rgb(247, 248, 250), Rgb(240, 242, 245), Rgb(237, 239, 242),
+            Rgb(252, 252, 253), Rgb(244, 245, 247), Rgb(230, 233, 238), Rgb(221, 225, 231),
             Rgb(206, 210, 218), Rgb(176, 184, 196),
             Rgb(31, 33, 37), Rgb(86, 92, 102), Rgb(124, 131, 143),
             Rgb(79, 103, 143));
@@ -185,23 +185,15 @@ internal static class SlateTheme
         var neutral = GetNeutralReference(dark);
         var (hue, accent) = GetThemeParameters(accentName, dark);
 
-        // Systematic hierarchy of tier chroma weights:
-        // - SurfaceBase / Page: clearly theme-temperature influenced, extremely low chroma (2.0)
-        // - Chrome / Sidebar: clearly theme-temperature influenced, low chroma (3.2)
-        // - SurfaceRaised: low-to-moderate chroma (5.0)
-        // - SurfaceInteractive: moderate chroma (8.0)
-        // - SurfaceHover: stronger theme presence (11.0)
-        // - SurfacePressed: stronger theme presence (13.0)
-        // - Divider / Border: low chroma and low visual prominence (3.5)
-        // - BorderStrong: subtle structural definition (5.5)
-        // - TextSecondary: subtle temperature tint (4.0 dark, 5.0 light)
+        // Structural surfaces carry temperature; interaction surfaces add a little
+        // more chroma. Selection receives a separate tonal accent below.
         double wPage = 2.0;
-        double wChrome = 3.2;
-        double wSidebar = 3.2;
-        double wRaised = 5.0;
-        double wInteractive = 8.0;
-        double wHover = 11.0;
-        double wPressed = 13.0;
+        double wChrome = 4.0;
+        double wSidebar = 4.5;
+        double wRaised = 3.5;
+        double wInteractive = 5.0;
+        double wHover = 7.0;
+        double wPressed = 8.0;
         double wDivider = 3.5;
         double wBorderStrong = 5.5;
         double wTextSec = dark ? 4.0 : 5.0;
@@ -231,10 +223,6 @@ internal static class SlateTheme
         var black = Rgb(0, 0, 0);
         var toward = dark ? white : black;
 
-        var text = EnsureContrast(def.TextPrimary, page, 7.0, toward);
-        var textSecondary = EnsureContrast(def.TextSecondary, page, 4.5, toward);
-        var textMuted = def.TextMuted;
-
         var accent = def.AccentPrimary;
         if (dark) accent = Mix(accent, white, 0.16);
         accent = EnsureContrast(accent, page, 4.5, toward);
@@ -243,11 +231,20 @@ internal static class SlateTheme
         var pressed = Mix(accent, dark ? black : white, 0.15);
         var accentBorder = Mix(accent, dark ? white : black, dark ? 0.20 : 0.18);
 
-        var onAccent = ContrastRatio(white, accent) >= ContrastRatio(black, accent) ? white : black;
-        onAccent = EnsureContrast(onAccent, accent, 4.5, onAccent == white ? white : black);
+        var accentSoft = Mix(def.SurfaceInteractive, accent, dark ? 0.16 : 0.10);
+        var accentSoftHover = Mix(def.SurfaceHover, accent, dark ? 0.20 : 0.14);
 
-        var accentSoft = Mix(page, accent, dark ? 0.22 : 0.14);
-        var accentSoftHover = Mix(page, accent, dark ? 0.30 : 0.22);
+        // Labels occur on controls and selected rows as well as the page. Check
+        // every opaque background so a theme never makes those labels disappear.
+        Color[] textSurfaces = [page, def.Chrome, def.Sidebar, def.SurfaceRaised,
+            def.SurfaceInteractive, def.SurfaceHover, def.SurfacePressed, accentSoft, accentSoftHover];
+        var text = EnsureSurfaceContrast(def.TextPrimary, textSurfaces, 7.0, toward);
+        var textSecondary = EnsureSurfaceContrast(def.TextSecondary, textSurfaces, 4.5, toward);
+        var textMuted = EnsureSurfaceContrast(def.TextMuted, textSurfaces, 4.5, toward);
+        accent = EnsureSurfaceContrast(accent, textSurfaces, 4.5, toward);
+        var onAccent = ContrastRatio(white, accent) >= ContrastRatio(black, accent) ? white : black;
+        hover = EnsureContrast(hover, onAccent, 4.5, onAccent == white ? black : white);
+        pressed = EnsureContrast(pressed, onAccent, 4.5, onAccent == white ? black : white);
 
         return new Palette(
             dark,
@@ -317,7 +314,7 @@ internal static class SlateTheme
         // toggles, selection, and keyboard focus the same restrained accent language.
         Set("AccentFillColorDefaultBrush", palette.AccentPrimary);
         Set("AccentFillColorSecondaryBrush", palette.AccentHover);
-        Set("AccentFillColorTertiaryBrush", WithAlpha(palette.AccentPrimary, 180));
+        Set("AccentFillColorTertiaryBrush", palette.AccentPressed);
         Set("AccentTextFillColorPrimaryBrush", palette.AccentPrimary);
         Set("AccentTextFillColorSecondaryBrush", palette.AccentHover);
         Set("FocusStrokeColorOuterBrush", palette.FocusRing);
@@ -326,7 +323,7 @@ internal static class SlateTheme
         Set("TextFillColorSecondaryBrush", palette.TextSecondary);
         Set("TextFillColorTertiaryBrush", palette.TextMuted);
         Set("TextOnAccentFillColorPrimaryBrush", palette.OnAccent);
-        Set("ControlFillColorDefaultBrush", WithAlpha(palette.SurfaceInteractive, palette.Dark ? (byte)170 : (byte)210));
+        Set("ControlFillColorDefaultBrush", palette.SurfaceInteractive);
         Set("ControlFillColorSecondaryBrush", palette.SurfaceInteractiveHover);
         Set("ControlFillColorTertiaryBrush", palette.SurfacePressed);
         Set("ControlStrokeColorDefaultBrush", palette.Divider);
@@ -337,6 +334,14 @@ internal static class SlateTheme
         Set("ListViewItemBackgroundSelected", palette.SurfaceSelected);
         Set("ListViewItemBackgroundSelectedPointerOver", palette.AccentSoftHover);
         Set("ListViewItemBackgroundPointerOver", palette.SurfaceInteractiveHover);
+        Set("ListViewItemBackgroundSelectedPressed", palette.SurfacePressed);
+        Set("ListViewItemForegroundSelected", palette.TextPrimary);
+        Set("ListViewItemForegroundSelectedPointerOver", palette.TextPrimary);
+        Set("LayerFillColorDefaultBrush", palette.SurfaceRaised);
+        Set("SolidBackgroundFillColorBaseBrush", palette.SurfaceBase);
+        Set("ContentDialogBackground", palette.SurfaceRaised);
+        Set("MenuFlyoutPresenterBackground", palette.SurfaceRaised);
+        Set("FlyoutPresenterBackground", palette.SurfaceRaised);
     }
 
     private static Color SystemAccent()
@@ -347,7 +352,6 @@ internal static class SlateTheme
 
     internal static Color WithAlpha(Color color, byte alpha) => Color.FromArgb(alpha, color.R, color.G, color.B);
     private static Color Rgb(byte r, byte g, byte b) => Color.FromArgb(255, r, g, b);
-    private static Color Argb(byte a, byte r, byte g, byte b) => Color.FromArgb(a, r, g, b);
 
     private static Color Mix(Color first, Color second, double amount)
     {
@@ -366,6 +370,13 @@ internal static class SlateTheme
     {
         for (double amount = .04; ContrastRatio(foreground, background) < minimum && amount <= 1; amount += .04)
             foreground = Mix(foreground, toward, amount);
+        return foreground;
+    }
+
+    private static Color EnsureSurfaceContrast(Color foreground, Color[] backgrounds, double minimum, Color toward)
+    {
+        foreach (var background in backgrounds)
+            foreground = EnsureContrast(foreground, background, minimum, toward);
         return foreground;
     }
 

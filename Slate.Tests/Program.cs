@@ -827,6 +827,51 @@ Check("Page-controlled titles and labels are strictly bounded to 512 characters 
     Equal("New tab", tab.Title);
 });
 
+Check("Shortcut routing preserves text-editing shortcuts and matches browser commands", () =>
+{
+    // Text-editing shortcuts must NOT be treated as browser commands
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyC, ShortcutModifiers.Control));
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyV, ShortcutModifiers.Control));
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyX, ShortcutModifiers.Control));
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyA, ShortcutModifiers.Control));
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyZ, ShortcutModifiers.Control));
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyY, ShortcutModifiers.Control));
+    Assert(BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyZ, ShortcutModifiers.Control | ShortcutModifiers.Shift));
+
+    // Browser commands must NOT be flagged as text-editing shortcuts
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyT, ShortcutModifiers.Control));
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyW, ShortcutModifiers.Control));
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyL, ShortcutModifiers.Control));
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyK, ShortcutModifiers.Control));
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyJ, ShortcutModifiers.Control));
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyH, ShortcutModifiers.Control));
+    Assert(!BrowserCommandRegistry.IsTextEditingShortcut(BrowserCommandRegistry.KeyR, ShortcutModifiers.Control));
+
+    // Browser commands match expected commands
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyT, ShortcutModifiers.Control, out var cmdT) && cmdT == BrowserCommand.NewTab);
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyW, ShortcutModifiers.Control, out var cmdW) && cmdW == BrowserCommand.CloseTab);
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyL, ShortcutModifiers.Control, out var cmdL) && cmdL == BrowserCommand.FocusAddress);
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyK, ShortcutModifiers.Control, out var cmdK) && cmdK == BrowserCommand.CommandPalette);
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyJ, ShortcutModifiers.Control, out var cmdJ) && cmdJ == BrowserCommand.Downloads);
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyH, ShortcutModifiers.Control, out var cmdH) && cmdH == BrowserCommand.History);
+    Assert(BrowserCommandRegistry.TryMatch(BrowserCommandRegistry.KeyR, ShortcutModifiers.Control, out var cmdR) && cmdR == BrowserCommand.Reload);
+});
+
+Check("Password submission capture policy enforces privacy and canonical origins", () =>
+{
+    // Private and temporary contexts are strictly ineligible
+    Assert(!PasswordCapturePolicy.TryNormalizeSubmission("https://example.com/login", "alice", "Secret123!", true, false, out _));
+    Assert(!PasswordCapturePolicy.TryNormalizeSubmission("https://example.com/login", "alice", "Secret123!", false, true, out _));
+
+    // Invalid credentials (empty password, invalid origin) are rejected
+    Assert(!PasswordCapturePolicy.TryNormalizeSubmission("not-a-url", "alice", "Secret123!", false, false, out _));
+    Assert(!PasswordCapturePolicy.TryNormalizeSubmission("https://example.com", "alice", "", false, false, out _));
+
+    // Valid submission normalizes origin
+    Assert(PasswordCapturePolicy.TryNormalizeSubmission("https://example.com/login?step=2", "alice", "Secret123!", false, false, out var origin));
+    Equal("https://example.com", origin);
+});
+
 Slate.Tests.BrowserDataImportArchitectureTests.Run(Check);
 Slate.Tests.PasswordCsvParsingTests.Run(Check);
 Slate.Tests.PasswordTests.Run(Check);

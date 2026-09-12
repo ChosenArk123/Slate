@@ -37,9 +37,11 @@ public sealed partial class MainWindow : Window
     private readonly DownloadCoordinator _downloadCoordinator = new();
     private readonly GamingEfficiencyService _gamingEfficiencyService;
     private readonly Grid _root = new();
+    private readonly Grid _titleBar = new() { Padding = new(18, 0, 150, 0) };
+    private readonly Border _topEdgeTrigger = new() { Height = 4, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Stretch, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), Visibility = Visibility.Collapsed };
     private readonly Grid _body = new();
     private readonly Grid _sidebar = new();
-    private readonly StackPanel _tabList = new() { Spacing = 4 };
+    private readonly StackPanel _tabList = new() { Spacing = 2 };
     private readonly ComboBox _workspacePicker = new() { HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 0 };
     private readonly Grid _content = new();
     private readonly Border _toolbarSurface = new() { HorizontalAlignment = HorizontalAlignment.Stretch, CornerRadius = new(SlateTheme.RadiusMedium) };
@@ -65,6 +67,7 @@ public sealed partial class MainWindow : Window
     private bool _findBarOpen;
     private bool _isUserFullScreen;
     private bool _isPageFullScreen;
+    private bool _wasMaximizedBeforeFullScreen;
     private readonly Border _pageFullscreenIndicator = new();
     private readonly TextBlock _pageFullscreenText = new();
     private readonly DispatcherTimer _pageFullscreenTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
@@ -95,6 +98,7 @@ public sealed partial class MainWindow : Window
         Title = "Slate";
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Slate.ico"));
         _store = new StateStore(App.ProfileDirectory);
+        _credentialVault = new CredentialVault(App.ProfileDirectory, new WindowsCredentialProtector());
         _faviconStore = new FaviconStore(Path.Combine(App.ProfileDirectory, "favicons"));
         _session = new BrowserSession(_store.Load());
         bool hardenedIsolation = App.HasHardenedIsolationArg || _session.State.Settings.HardenedIsolation;
@@ -160,30 +164,31 @@ public sealed partial class MainWindow : Window
     {
         _root.RowDefinitions.Add(new() { Height = new(36) });
         _root.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
-        var titleBar = new Grid { Padding = new(18, 0, 150, 0) };
-        titleBar.ColumnDefinitions.Add(new() { Width = new(210) });
-        titleBar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        _titleBar.ColumnDefinitions.Clear();
+        _titleBar.Children.Clear();
+        _titleBar.ColumnDefinitions.Add(new() { Width = new(210) });
+        _titleBar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         var brandLockup = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9, VerticalAlignment = VerticalAlignment.Center };
         var brandMark = new Grid { Width = 12, Height = 12 };
         brandMark.Children.Add(_brandRing); brandMark.Children.Add(_brandDot);
         brandLockup.Children.Add(brandMark);
         brandLockup.Children.Add(_brand);
-        titleBar.Children.Add(brandLockup);
-        Grid.SetColumn(_windowTitle, 1); titleBar.Children.Add(_windowTitle);
-        _root.Children.Add(titleBar);
-        SetTitleBar(titleBar);
+        _titleBar.Children.Add(brandLockup);
+        Grid.SetColumn(_windowTitle, 1); _titleBar.Children.Add(_windowTitle);
+        _root.Children.Add(_titleBar);
+        SetTitleBar(_titleBar);
 
         _body.ColumnDefinitions.Add(new() { Width = new(228) });
         _body.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         Grid.SetRow(_body, 1); _root.Children.Add(_body);
-        _sidebar.Padding = new(10, 12, 10, 12);
+        _sidebar.Padding = new(10, 6, 10, 10);
         _sidebar.RowDefinitions.Add(new() { Height = GridLength.Auto });
         _sidebar.RowDefinitions.Add(new() { Height = GridLength.Auto });
         _sidebar.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         _sidebar.RowDefinitions.Add(new() { Height = GridLength.Auto });
         _body.Children.Add(_sidebar);
 
-        var workspaceRow = new Grid { Margin = new(0, 0, 0, 16) };
+        var workspaceRow = new Grid { Margin = new(0, 0, 0, 8) };
         workspaceRow.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         workspaceRow.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         _workspacePicker.DisplayMemberPath = "Name";
@@ -207,9 +212,9 @@ public sealed partial class MainWindow : Window
         newTab.Content = IconLabel("\uE710", "New tab");
         newTab.Tag = "new";
         Grid.SetRow(newTab, 1); _sidebar.Children.Add(newTab);
-        var scroll = new ScrollViewer { Content = _tabList, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 12, 0, 0) };
+        var scroll = new ScrollViewer { Content = _tabList, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 4, 0, 8) };
         Grid.SetRow(scroll, 2); _sidebar.Children.Add(scroll);
-        var bottom = new StackPanel { Spacing = 4 };
+        var bottom = new StackPanel { Spacing = 4, Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         foreach (var (icon, label, action) in new (string, string, Func<Task>)[]
         {
             ("\uE721", "Command palette", () => ShowPaletteAsync()),
@@ -218,7 +223,8 @@ public sealed partial class MainWindow : Window
             ("\uE713", "Settings", () => ShowSettingsAsync())
         })
         {
-            var button = IconButton(icon, label, action); button.Content = IconLabel(icon, label);
+            var button = IconButton(icon, label, action); button.Content = IconSlot(Icon(icon));
+            button.Width = 44;
             button.Tag = (icon, label); button.HorizontalAlignment = HorizontalAlignment.Stretch;
             button.HorizontalContentAlignment = HorizontalAlignment.Stretch;
             button.Padding = new(8, 0, 8, 0);
@@ -233,13 +239,12 @@ public sealed partial class MainWindow : Window
         _content.RowDefinitions.Add(new() { Height = new(24) });
         _content.Margin = new(0, 0, 10, 0);
         Grid.SetColumn(_content, 1); _body.Children.Add(_content);
-        var toolbar = new Grid { ColumnSpacing = 4, Padding = new(0, 4, 0, 8) };
+        var toolbar = new Grid { ColumnSpacing = 2, Padding = new(0, 4, 0, 6) };
         _collapse = IconButton("\uE700", "Toggle sidebar · Ctrl+B", ToggleSidebar);
         _back = IconButton("\uE72B", "Back · Alt+Left", () => CurrentCore()?.GoBack());
         _forward = IconButton("\uE72A", "Forward · Alt+Right", () => CurrentCore()?.GoForward());
         _reload = IconButton("\uE72C", "Reload · Ctrl+R", Reload);
         _security = IconButton("\uE946", "Site information and permissions", () => ShowSiteInfoAsync());
-        var split = IconButton("\uE89F", "Split view · Ctrl+Shift+S", () => ToggleSplitAsync());
         var menu = IconButton("\uE712", "Browser menu", () => ShowPaletteAsync());
         _zoomBadge.Content = "100%";
         _zoomBadge.Height = 34;
@@ -254,7 +259,8 @@ public sealed partial class MainWindow : Window
         _zoomBadge.Click += (_, _) => ZoomReset();
         _bookmarkButton = IconButton("\uE734", "Bookmark this tab · Ctrl+D", () => ToggleBookmarkAsync());
         _downloadsButton = IconButton("\uE896", "Downloads · Ctrl+J", () => ShowDownloadsAsync());
-        FrameworkElement[] toolbarItems = [_collapse, _back, _forward, _reload, _security, _address, _bookmarkButton, _zoomBadge, _downloadsButton, split, menu];
+        _passwordButton = IconButton("\uE8D7", "Passwords", ShowPasswordsForPageAsync);
+        FrameworkElement[] toolbarItems = [_collapse, _back, _forward, _reload, _security, _address, _bookmarkButton, _zoomBadge, _downloadsButton, _passwordButton, menu];
         for (int i = 0; i < toolbarItems.Length; i++)
         {
             toolbar.ColumnDefinitions.Add(new() { Width = toolbarItems[i] == _address ? new(1, GridUnitType.Star) : GridLength.Auto });
@@ -351,16 +357,52 @@ public sealed partial class MainWindow : Window
 
         _pageFullscreenIndicator.CornerRadius = new(SlateTheme.RadiusMedium);
         _pageFullscreenIndicator.BorderThickness = new(1);
-        _pageFullscreenIndicator.Padding = new(16, 8, 16, 8);
+        _pageFullscreenIndicator.Padding = new(14, 6, 8, 6);
         _pageFullscreenIndicator.HorizontalAlignment = HorizontalAlignment.Center;
         _pageFullscreenIndicator.VerticalAlignment = VerticalAlignment.Top;
         _pageFullscreenIndicator.Margin = new(0, 16, 0, 0);
         _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
-        _pageFullscreenIndicator.Child = _pageFullscreenText;
-        _pageFullscreenText.FontSize = 13;
+
+        var fullscreenExitButton = IconButton("\uE73F", "Exit full screen · F11 / Esc", () => StopLoading());
+        fullscreenExitButton.Width = 28;
+        fullscreenExitButton.MinWidth = 28;
+        fullscreenExitButton.Height = 28;
+        fullscreenExitButton.Padding = new(4);
+        fullscreenExitButton.VerticalAlignment = VerticalAlignment.Center;
+
+        _pageFullscreenText.FontSize = 12;
         _pageFullscreenText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+        _pageFullscreenText.VerticalAlignment = VerticalAlignment.Center;
+
+        var fullscreenStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
+        fullscreenStack.Children.Add(_pageFullscreenText);
+        fullscreenStack.Children.Add(fullscreenExitButton);
+        _pageFullscreenIndicator.Child = fullscreenStack;
+
+        _pageFullscreenIndicator.PointerEntered += (_, _) => _pageFullscreenTimer.Stop();
+        _pageFullscreenIndicator.PointerExited += (_, _) =>
+        {
+            if (_isUserFullScreen || _isPageFullScreen)
+            {
+                _pageFullscreenTimer.Stop();
+                _pageFullscreenTimer.Start();
+            }
+        };
+
+        _topEdgeTrigger.PointerEntered += (_, _) =>
+        {
+            if (_isUserFullScreen || _isPageFullScreen)
+            {
+                _pageFullscreenIndicator.Visibility = Visibility.Visible;
+                _pageFullscreenTimer.Stop();
+                _pageFullscreenTimer.Start();
+            }
+        };
+
         Grid.SetRowSpan(_pageFullscreenIndicator, 2);
         _root.Children.Add(_pageFullscreenIndicator);
+        Grid.SetRowSpan(_topEdgeTrigger, 2);
+        _root.Children.Add(_topEdgeTrigger);
 
         _bookmarksBar.Content = _bookmarksList;
         var toolbarContainer = new StackPanel { Spacing = 2 };
@@ -429,6 +471,16 @@ public sealed partial class MainWindow : Window
         pageContainer.Children.Add(_panes);
         pageContainer.Children.Add(_findBar);
         _pageFrame.Child = pageContainer;
+        Grid.SetRow(_passwordNotice, 1); _content.Children.Add(_passwordNotice);
+        _passwordOfferAcceptButton.Click += async (_, _) =>
+        {
+            if (_offeringController is not { } controller) return;
+            bool update = controller.IsUpdate;
+            Notify(await controller.SaveOfferAsync() ? update ? "Password updated." : "Password saved."
+                : "Password was not saved. The entry or page may have changed.");
+        };
+        _passwordNotice.ActionButton = _passwordOfferAcceptButton;
+        _passwordNotice.CloseButtonClick += (_, _) => _offeringController?.Dismiss();
         Grid.SetRow(_pageFrame, 2); _content.Children.Add(_pageFrame);
         Grid.SetRow(_progress, 2); _content.Children.Add(_progress);
         _status.Margin = new(8, 3, 8, 0); Grid.SetRow(_status, 3); _content.Children.Add(_status);
@@ -486,6 +538,11 @@ public sealed partial class MainWindow : Window
         _pageFrame.Background = _theme.SurfaceBaseBrush;
         _pageFrame.BorderBrush = _theme.DividerBrush;
         _address.Background = _theme.SurfaceInteractiveBrush;
+        _address.Foreground = _theme.TextPrimaryBrush;
+        _status.Foreground = _theme.TextSecondaryBrush;
+        _status.Opacity = 1;
+        _windowTitle.Foreground = _theme.TextSecondaryBrush;
+        _windowTitle.Opacity = 1;
         _address.BorderBrush = _addressEditing ? _theme.AccentBorderBrush : _theme.DividerBrush;
         _findBar.Background = _theme.SurfaceRaisedBrush;
         _findBar.BorderBrush = _theme.DividerBrush;
@@ -500,6 +557,7 @@ public sealed partial class MainWindow : Window
         _pageFullscreenText.Foreground = _theme.TextPrimaryBrush;
         UpdateDownloadIndicator();
         UpdateBookmarkIndicator();
+        UpdatePasswordIndicator();
         RenderBookmarksBar();
         _brand.Foreground = _theme.AccentPrimaryBrush;
         _brandRing.Stroke = _theme.AccentPrimaryBrush;
@@ -530,7 +588,7 @@ public sealed partial class MainWindow : Window
     }
     private Button IconButton(string glyph, string label, Action action)
     {
-        var button = new Button { Content = Icon(glyph), MinWidth = 34, Height = 34, Padding = new(8, 0, 8, 0), Background = new SolidColorBrush(Colors.Transparent), BorderThickness = new(0), CornerRadius = new(SlateTheme.RadiusSmall) };
+        var button = new Button { Content = Icon(glyph), MinWidth = 32, Height = 32, Padding = new(8, 0, 8, 0), UseSystemFocusVisuals = true, Background = new SolidColorBrush(Colors.Transparent), BorderThickness = new(0), CornerRadius = new(SlateTheme.RadiusSmall) };
         ToolTipService.SetToolTip(button, label); AutomationProperties.SetName(button, label);
         button.Click += (_, _) => { try { action(); } catch (Exception ex) { Notify(ex.Message); } }; return button;
     }
@@ -539,10 +597,12 @@ public sealed partial class MainWindow : Window
     private void RenderSidebar()
     {
         _rendering = true;
-        _body.ColumnDefinitions[0].Width = new(Collapsed ? 64 : 228);
+        bool isFullScreen = _isUserFullScreen || _isPageFullScreen;
+        _body.ColumnDefinitions[0].Width = new(isFullScreen ? 0 : (Collapsed ? 64 : 228));
+        _sidebar.Visibility = isFullScreen ? Visibility.Collapsed : Visibility.Visible;
         _workspacePicker.ItemsSource = null; _workspacePicker.ItemsSource = _session.State.Workspaces;
         _workspacePicker.SelectedItem = _session.ActiveWorkspace;
-        _workspacePicker.Visibility = Collapsed ? Visibility.Collapsed : Visibility.Visible;
+        _workspacePicker.Visibility = (Collapsed || isFullScreen) ? Visibility.Collapsed : Visibility.Visible;
         if (Collapsed)
         {
             Grid.SetColumn(_workspaceMenu, 0);
@@ -572,14 +632,15 @@ public sealed partial class MainWindow : Window
             }
             if (element is StackPanel panel && panel.Tag is "bottom")
             {
+                panel.Orientation = Collapsed ? Orientation.Vertical : Orientation.Horizontal;
                 foreach (var button in panel.Children.OfType<Button>())
                 {
                     if (button.Tag is ValueTuple<string, string> meta)
                     {
                         button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        button.HorizontalContentAlignment = Collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
-                        button.Padding = Collapsed ? new(0) : new(8, 0, 8, 0);
-                        button.Content = Collapsed ? IconSlot(Icon(meta.Item1)) : IconLabel(meta.Item1, meta.Item2);
+                        button.HorizontalContentAlignment = HorizontalAlignment.Center;
+                        button.Padding = new(0);
+                        button.Content = IconSlot(Icon(meta.Item1));
                     }
                 }
             }
@@ -588,9 +649,9 @@ public sealed partial class MainWindow : Window
         bool regularHeader = false, pinnedHeader = false;
         foreach (var tab in _session.VisibleTabs)
         {
-            if (tab.IsPinned && !pinnedHeader) { AddTabHeading("PINNED"); pinnedHeader = true; }
-            if (!tab.IsPinned && !regularHeader) { AddTabHeading("TABS"); regularHeader = true; }
-            var row = new Grid { CornerRadius = new(SlateTheme.RadiusSmall), Height = 38 };
+            if (tab.IsPinned && !pinnedHeader) { AddTabHeading("Pinned"); pinnedHeader = true; }
+            if (!tab.IsPinned && !regularHeader) { AddTabHeading("Tabs"); regularHeader = true; }
+            var row = new Grid { CornerRadius = new(SlateTheme.RadiusSmall), Height = 34 };
             bool active = tab.Id == _session.ActiveTab.Id;
             row.Background = active ? _theme.SurfaceSelectedBrush : new SolidColorBrush(Colors.Transparent);
             row.PointerEntered += (_, _) => row.Background = active ? _theme.AccentSoftHoverBrush : _theme.SurfaceInteractiveHoverBrush;
@@ -598,7 +659,8 @@ public sealed partial class MainWindow : Window
             row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
             var button = IconButton(tab.Url == Navigation.NewTab ? "\uE710" : "\uE774", tab.Title, () => ActivateTabAsync(tab.Id));
-            button.Height = 38; button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            button.Height = 34; button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            AutomationProperties.SetItemStatus(button, active ? "Active tab" : tab.IsSleeping ? "Sleeping tab" : "");
             button.HorizontalContentAlignment = Collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
             button.Padding = Collapsed ? new(0) : new(8, 0, 8, 0);
             var tabContent = new Grid { ColumnSpacing = 10, HorizontalAlignment = Collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch };
@@ -636,7 +698,7 @@ public sealed partial class MainWindow : Window
             tabContent.Children.Add(iconBox);
             if (!Collapsed)
             {
-                var label = new TextBlock { Text = tab.Title, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Opacity = tab.IsSleeping ? .5 : 1,
+                var label = new TextBlock { Text = tab.Title, FontSize = 13, Foreground = tab.IsSleeping ? _theme.TextSecondaryBrush : _theme.TextPrimaryBrush, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
                     FontStyle = tab.IsTemporary ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal };
                 if (tab.IsPrivate) label.Foreground = _theme.AccentPrimaryBrush;
                 if (active) label.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
@@ -686,9 +748,19 @@ public sealed partial class MainWindow : Window
             if (!Collapsed && !tab.IsPinned)
             {
                 var close = IconButton("\uE711", "Close " + tab.Title, () => CloseTabAsync(tab.Id));
-                close.MinWidth = 26; close.Width = 26; close.Padding = new(4); close.Opacity = active ? .8 : .25;
-                row.PointerEntered += (_, _) => close.Opacity = 1;
-                row.PointerExited += (_, _) => close.Opacity = active ? .8 : .25;
+                close.MinWidth = 28; close.Width = 28; close.Padding = new(4);
+                bool pointerInside = false;
+                void UpdateCloseVisibility()
+                {
+                    bool visible = active || pointerInside || button.FocusState != FocusState.Unfocused || close.FocusState != FocusState.Unfocused;
+                    close.Opacity = visible ? 1 : 0;
+                    close.IsHitTestVisible = visible;
+                }
+                row.PointerEntered += (_, _) => { pointerInside = true; UpdateCloseVisibility(); };
+                row.PointerExited += (_, _) => { pointerInside = false; UpdateCloseVisibility(); };
+                row.GotFocus += (_, _) => UpdateCloseVisibility();
+                row.LostFocus += (_, _) => DispatcherQueue.TryEnqueue(UpdateCloseVisibility);
+                UpdateCloseVisibility();
                 actions.Children.Add(close);
             }
             if (actions.Children.Count > 0)
@@ -703,7 +775,7 @@ public sealed partial class MainWindow : Window
 
     private void AddTabHeading(string title)
     {
-        if (!Collapsed) _tabList.Children.Add(new TextBlock { Text = title, FontSize = 9, CharacterSpacing = 160, Opacity = .4, Margin = new(9, 10, 0, 6) });
+        if (!Collapsed) _tabList.Children.Add(new TextBlock { Text = title, FontSize = 11, Foreground = _theme.TextSecondaryBrush, Margin = new(8, 10, 0, 4) });
     }
 
     private MenuFlyout TabMenu(BrowserTab tab)
@@ -756,6 +828,7 @@ public sealed partial class MainWindow : Window
 
     private void ToggleSidebar()
     {
+        if (_isUserFullScreen || _isPageFullScreen) return;
         var startWidth = _body.ColumnDefinitions[0].ActualWidth;
         _session.State.Settings.SidebarCollapsed = !Collapsed;
         RenderSidebar(); Animate(_sidebar, true); QueueSave();

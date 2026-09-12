@@ -25,6 +25,7 @@ public sealed class TabRuntime(WebView2 view)
     public long FaviconRevision { get; set; }
     public HashSet<Guid> Downloads { get; } = [];
     public bool HasActivePermissionPrompt { get; set; }
+    internal PasswordController? Passwords { get; set; }
     public Action? Teardown { get; set; }
 }
 
@@ -78,6 +79,7 @@ public sealed class TabManagerService
         if (_runtimes.Remove(tabId, out var runtime))
         {
             try { OnRuntimeDisposing?.Invoke(runtime); } catch { }
+            try { runtime.Passwords?.Dispose(); runtime.Passwords = null; } catch { }
             try { runtime.Teardown?.Invoke(); } catch { }
             runtime.Teardown = null;
             try
