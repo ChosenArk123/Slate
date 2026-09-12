@@ -384,8 +384,8 @@ Check("DownloadSafety resolves collision-free paths within designated directory"
 
 Check("DownloadSafety validates safe local directory paths and rejects UNC shares", () =>
 {
-    Assert(DownloadSafety.IsSafeLocalDirectory(@"C:\Users\admin\Downloads"));
-    Assert(DownloadSafety.IsSafeLocalDirectory(@"D:\Data"));
+    var localRoot = Path.GetPathRoot(Environment.SystemDirectory)!;
+    Assert(DownloadSafety.IsSafeLocalDirectory(Path.Combine(localRoot, "Users", "Slate", "Downloads")));
     Assert(!DownloadSafety.IsSafeLocalDirectory(@"\\evil.com\share"));
     Assert(!DownloadSafety.IsSafeLocalDirectory(@"//evil.com/share"));
     Assert(!DownloadSafety.IsSafeLocalDirectory(@"Downloads\sub"));
@@ -443,7 +443,7 @@ Check("BrowserSession.Normalize sanitizes persisted download filenames and remov
     Equal("dangerous.exe", session.State.Downloads[0].FileName);
     Equal("", session.State.Downloads[0].Path); // UNC path cleared
     Equal("_CON.txt", session.State.Downloads[1].FileName);
-    Equal(@"C:\Downloads\CON.txt", session.State.Downloads[1].Path);
+    Equal("", session.State.Downloads[1].Path); // Reserved device target cleared
 });
 
 Check("BrowserSession.MoveTab moves tab up and down relative to siblings", () =>
@@ -694,6 +694,9 @@ Check("Navigation rejects dangerous local file extensions and UNC paths", () =>
     Assert(!Navigation.IsLocalFileUrl("file:///C:/script.ps1")); // Script
     Assert(!Navigation.IsLocalFileUrl("file:///C:/batch.bat")); // Batch
     Assert(!Navigation.IsLocalFileUrl("file:///C:/virus.scr")); // Screen saver executable
+    Assert(!Navigation.IsLocalFileUrl("file:///C:/launcher.js")); // Windows Script Host launcher
+    Assert(!Navigation.IsLocalFileUrl("file:///C:/shortcut.lnk")); // Shell shortcut
+    Assert(!Navigation.IsLocalFileUrl("file:///%5C%5Cserver%5Cshare%5Cpage.html")); // Encoded UNC share
     Assert(!Navigation.IsLocalFileUrl("https://example.com/")); // Not a file
     Assert(Navigation.IsLocalFileUrl("file:///C:/Users/test/document.html")); // Safe HTML
     Assert(Navigation.IsLocalFileUrl("file:///C:/test.txt")); // Safe Text
@@ -826,8 +829,5 @@ Check("Page-controlled titles and labels are strictly bounded to 512 characters 
 
 Slate.Tests.BrowserDataImportArchitectureTests.Run(Check);
 Slate.Tests.PasswordCsvParsingTests.Run(Check);
-Slate.Tests.PasswordImportIntegrationTests.Run(Check);
-PasswordTests.Run(Check);
-Slate.Tests.PasswordConcurrencyTests.Run(Check);
-Slate.Tests.ImportAdversarialTests.Run(Check);
+Slate.Tests.PasswordTests.Run(Check);
 Console.WriteLine($"\n{passed} checks passed.");

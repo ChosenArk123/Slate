@@ -43,17 +43,16 @@ public sealed class BrowserSession
         }
         State.History = State.History.Where(h => Navigation.IsWebUrl(h.Url)).Take(2000).ToList();
         foreach (var entry in State.History) entry.Title = BrowserText.SanitizeTitle(entry.Title, Navigation.DisplayHost(entry.Url));
-        State.RecentlyClosed = State.RecentlyClosed.Where(t => !t.IsTemporary && !t.IsPrivate).Take(30).ToList();
+        State.RecentlyClosed = State.RecentlyClosed.Where(t => !t.IsTemporary && !t.IsPrivate && Navigation.IsWebUrl(t.Url)).Take(30).ToList();
         foreach (var tab in State.RecentlyClosed) tab.Favicon = null;
-        State.Downloads = State.Downloads.Take(100).ToList();
+        State.Downloads = State.Downloads.Where(download => !download.IsPrivate).Take(100).ToList();
         foreach (var download in State.Downloads)
         {
             if (download.Status is "Downloading" or "Paused") download.Status = "Interrupted";
             download.FileName = DownloadSafety.SanitizeFileName(download.FileName);
             if (!string.IsNullOrEmpty(download.Path))
             {
-                var dir = Path.GetDirectoryName(download.Path);
-                if (!DownloadSafety.IsSafeLocalDirectory(dir))
+                if (!DownloadSafety.IsSafeLocalFilePath(download.Path) || Navigation.IsDangerousExtension(Path.GetExtension(download.Path)))
                     download.Path = "";
             }
         }
@@ -110,7 +109,7 @@ public sealed class BrowserSession
         var siblings = State.Tabs.Where(t => t.WorkspaceId == workspace.Id).OrderByDescending(t => t.IsPinned).ToList();
         var index = siblings.IndexOf(tab);
         State.Tabs.Remove(tab);
-        if (!tab.IsTemporary && !tab.IsPrivate && tab.Url != Navigation.NewTab)
+        if (!tab.IsTemporary && !tab.IsPrivate && Navigation.IsWebUrl(tab.Url))
         {
             State.RecentlyClosed.Insert(0, tab);
             State.RecentlyClosed = State.RecentlyClosed.Take(30).ToList();

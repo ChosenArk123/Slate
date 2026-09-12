@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Web.WebView2.Core;
 using Slate.Core;
+using Slate.Services;
 using Windows.System;
 
 namespace Slate;
@@ -17,6 +18,17 @@ namespace Slate;
 public sealed partial class MainWindow
 {
     private sealed record PaletteItem(string Title, string Detail, string Glyph, Func<Task> Run);
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
+    }
 
     private ContentDialog Dialog(string title, object content, string close = "Done")
     {
@@ -413,7 +425,8 @@ public sealed partial class MainWindow
             Header = "Theme",
             ItemsSource = new[] { "System", "Light", "Dark" },
             SelectedItem = settings.Theme,
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0
         };
         AutomationProperties.SetName(theme, "Theme");
         AutomationProperties.SetAutomationId(theme, "SettingsThemeComboBox");
@@ -421,7 +434,8 @@ public sealed partial class MainWindow
         var accent = new ComboBox
         {
             Header = "Accent color",
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0
         };
         AutomationProperties.SetName(accent, "Accent color");
         AutomationProperties.SetAutomationId(accent, "SettingsAccentComboBox");
@@ -470,7 +484,8 @@ public sealed partial class MainWindow
             Header = "Search engine",
             ItemsSource = Navigation.SearchEngines,
             SelectedItem = settings.SearchEngine,
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0
         };
         AutomationProperties.SetName(engine, "Search engine");
         AutomationProperties.SetAutomationId(engine, "SettingsSearchEngineComboBox");
@@ -480,7 +495,8 @@ public sealed partial class MainWindow
             Header = "Startup behavior",
             ItemsSource = BrowserSettings.StartupBehaviorOptions,
             SelectedItem = settings.StartupBehavior,
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0
         };
         AutomationProperties.SetName(startupBehavior, "Startup behavior");
         AutomationProperties.SetAutomationId(startupBehavior, "SettingsStartupBehaviorComboBox");
@@ -492,7 +508,8 @@ public sealed partial class MainWindow
             Maximum = 500,
             Value = settings.DefaultZoomPercent,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0
         };
         AutomationProperties.SetName(defaultZoom, "Default page zoom (%)");
         AutomationProperties.SetAutomationId(defaultZoom, "SettingsDefaultZoomNumberBox");
@@ -509,7 +526,7 @@ public sealed partial class MainWindow
         {
             Content = "Open Windows Default Apps settings",
             HorizontalAlignment = HorizontalAlignment.Left,
-            Width = 220,
+            Width = 248,
             HorizontalContentAlignment = HorizontalAlignment.Left
         };
         AutomationProperties.SetName(defaultBrowserButton, "Open Windows Default Apps settings");
@@ -549,47 +566,26 @@ public sealed partial class MainWindow
             Header = "Sleep inactive tabs",
             ItemsSource = BrowserSettings.SleepOptions,
             SelectedItem = BrowserSettings.MinutesToSleepOption(settings.SleepAfterMinutes),
-            HorizontalAlignment = HorizontalAlignment.Stretch
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            MinWidth = 0
         };
         AutomationProperties.SetName(sleep, "Sleep inactive tabs");
         AutomationProperties.SetAutomationId(sleep, "SettingsTabSleepComboBox");
 
-        // Section 4: Privacy / Data
-        var autofillPasswords = new ToggleSwitch
+        // Section 4: Privacy / Security
+        var hardenedIsolationToggle = new ToggleSwitch
         {
-            Header = "Autofill one matching account on secure sites",
-            IsOn = settings.AutofillPasswords
+            Header = "Hardened isolation (JIT-less mode)",
+            IsOn = settings.HardenedIsolation
         };
-        AutomationProperties.SetName(autofillPasswords, "Autofill passwords");
-        AutomationProperties.SetAutomationId(autofillPasswords, "SettingsAutofillPasswordsToggle");
-
-        var passwords = new Button
-        {
-            Content = "Manage passwords",
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Width = 220,
-            HorizontalContentAlignment = HorizontalAlignment.Left
-        };
-        AutomationProperties.SetName(passwords, "Manage passwords");
-        AutomationProperties.SetAutomationId(passwords, "SettingsManagePasswordsButton");
-
-        var importData = new Button
-        {
-            Content = "Import browser data",
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Width = 220,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
-            AccessKey = "I"
-        };
-        AutomationProperties.SetName(importData, "Import browser data");
-        AutomationProperties.SetAutomationId(importData, "SettingsImportBrowserDataButton");
-        AutomationProperties.SetHelpText(importData, "Import passwords from a CSV export file");
+        AutomationProperties.SetName(hardenedIsolationToggle, "Hardened isolation (JIT-less mode)");
+        AutomationProperties.SetAutomationId(hardenedIsolationToggle, "SettingsHardenedIsolationToggle");
 
         var clearData = new Button
         {
             Content = "Clear browsing data",
             HorizontalAlignment = HorizontalAlignment.Left,
-            Width = 220,
+            Width = 248,
             HorizontalContentAlignment = HorizontalAlignment.Left
         };
         AutomationProperties.SetName(clearData, "Clear browsing data");
@@ -605,6 +601,7 @@ public sealed partial class MainWindow
         };
         AutomationProperties.SetName(downloadLocation, "Download location");
         AutomationProperties.SetAutomationId(downloadLocation, "SettingsDownloadLocationTextBox");
+        AutomationProperties.SetHelpText(downloadLocation, "Leave blank to use the Windows Downloads folder");
 
         var chooseFolder = new Button
         {
@@ -614,6 +611,7 @@ public sealed partial class MainWindow
         };
         AutomationProperties.SetName(chooseFolder, "Choose folder");
         AutomationProperties.SetAutomationId(chooseFolder, "SettingsChooseFolderButton");
+        ToolTipService.SetToolTip(chooseFolder, "Choose download folder");
         chooseFolder.Click += async (_, _) =>
         {
             try
@@ -662,7 +660,7 @@ public sealed partial class MainWindow
         {
             Content = "Open profile folder",
             HorizontalAlignment = HorizontalAlignment.Left,
-            Width = 220,
+            Width = 248,
             HorizontalContentAlignment = HorizontalAlignment.Left
         };
         AutomationProperties.SetName(profile, "Open profile folder");
@@ -700,16 +698,20 @@ public sealed partial class MainWindow
         };
         AutomationProperties.SetName(aboutTitle, $"Slate {appVersionString}");
         AutomationProperties.SetAutomationId(aboutTitle, "SettingsAboutTitleText");
+        AutomationProperties.SetHeadingLevel(aboutTitle, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
         var assemblyVersionNote = Note($"Assembly version: {fullVersionString}");
+        AutomationProperties.SetName(assemblyVersionNote, assemblyVersionNote.Text);
         AutomationProperties.SetAutomationId(assemblyVersionNote, "SettingsAssemblyVersionText");
         var webViewVersionNote = Note($"WebView2 runtime: {webView2Version}");
+        AutomationProperties.SetName(webViewVersionNote, webViewVersionNote.Text);
         AutomationProperties.SetAutomationId(webViewVersionNote, "SettingsWebView2VersionText");
         var architectureNote = Note($"Architecture: {arch}");
+        AutomationProperties.SetName(architectureNote, architectureNote.Text);
         AutomationProperties.SetAutomationId(architectureNote, "SettingsArchitectureText");
 
         StackPanel Section(string title, params UIElement[] controls)
         {
-            var section = new StackPanel { Spacing = 8 };
+            var section = new StackPanel { Spacing = 6 };
             var heading = new TextBlock
             {
                 Text = title,
@@ -717,9 +719,10 @@ public sealed partial class MainWindow
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 Foreground = _theme.TextSecondaryBrush,
                 CharacterSpacing = 30,
-                Margin = new(0, 1, 0, 2)
+                Margin = new(0, 2, 0, 2)
             };
             AutomationProperties.SetName(heading, title + " settings");
+            AutomationProperties.SetHeadingLevel(heading, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level2);
             section.Children.Add(heading);
             foreach (var control in controls) section.Children.Add(control);
             return section;
@@ -730,7 +733,7 @@ public sealed partial class MainWindow
             toggle.Header = null;
             toggle.HorizontalAlignment = HorizontalAlignment.Right;
             toggle.VerticalAlignment = VerticalAlignment.Center;
-            var row = new Grid { MinHeight = 36, ColumnSpacing = 16 };
+            var row = new Grid { MinHeight = 32, ColumnSpacing = 12 };
             row.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
             var text = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
@@ -752,16 +755,13 @@ public sealed partial class MainWindow
         defaultBrowserButton.TabIndex = 8;
         restore.TabIndex = 9;
         sleep.TabIndex = 10;
-        autofillPasswords.TabIndex = 11;
-        passwords.TabIndex = 12;
-        importData.TabIndex = 13;
-        clearData.TabIndex = 14;
-        downloadLocation.TabIndex = 15;
-        chooseFolder.TabIndex = 16;
-        askDownload.TabIndex = 17;
-        profile.TabIndex = 18;
+        clearData.TabIndex = 11;
+        downloadLocation.TabIndex = 12;
+        chooseFolder.TabIndex = 13;
+        askDownload.TabIndex = 14;
+        profile.TabIndex = 15;
 
-        var colors = new Grid { ColumnSpacing = 16 };
+        var colors = new Grid { ColumnSpacing = 12 };
         colors.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         colors.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         colors.Children.Add(theme); Grid.SetColumn(accent, 1); colors.Children.Add(accent);
@@ -769,16 +769,16 @@ public sealed partial class MainWindow
         var panel = new StackPanel
         {
             Width = 430,
-            Spacing = 14,
-            Padding = new(2, 2, 12, 6),
+            Spacing = 12,
+            Padding = new(2, 0, 12, 4),
             Children =
             {
                 Section("Appearance", colors, ToggleRow("Reduce motion", motion), ToggleRow("Show bookmarks bar", bookmarksBarToggle)),
                 Section("Browsing", engine, startupBehavior, defaultZoom, ToggleRow("Developer tools (F12)", devTools), defaultBrowserButton, Note("Configure Slate as your default web browser in Windows Settings.")),
                 Section("Tabs", ToggleRow("Restore tabs on startup", restore), sleep, Note("Sleeping preserves page state while freeing memory. Closed tabs restore their last URL.")),
-                Section("Privacy / Data", Note("Temporary tabs share regular cookies; InPrivate tabs use isolated ephemeral storage and never access passwords."), ToggleRow("Autofill one matching account on secure sites", autofillPasswords), passwords, importData, clearData),
+                Section("Privacy / Security", ToggleRow("Hardened isolation (JIT-less mode)", hardenedIsolationToggle), Note("JIT-less mode neutralizes ~60% of zero-day memory bugs. Keep off for full hardware VP9/AV1 decoding (YouTube 4K) and responsive web apps."), Note("Temporary tabs share regular cookies; InPrivate tabs use isolated ephemeral storage."), clearData),
                 Section("Downloads", downloadGrid, ToggleRow("Ask where to save each file before downloading", askDownload)),
-                Section("Profile", profile, Note("Slate uses one local DPAPI-encrypted profile. Multi-profile and cloud sync are not available.")),
+                Section("Profile", profile, Note("Slate isolates browsing data locally. Cloud sync is disabled for privacy.")),
                 Section("About", aboutTitle, assemblyVersionNote, webViewVersionNote, architectureNote, Note("Native Windows browser · .NET 8 · Microsoft WebView2"))
             }
         };
@@ -789,30 +789,45 @@ public sealed partial class MainWindow
             MaxHeight = 560,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            VerticalScrollMode = ScrollMode.Auto,
+            ZoomMode = ZoomMode.Disabled,
+            BringIntoViewOnFocusChange = true,
             IsTabStop = false
         };
         var dialog = Dialog("Settings", settingsScroll, "Cancel");
         dialog.PrimaryButtonText = "Save changes";
         dialog.DefaultButton = ContentDialogButton.Primary;
-        if (settings.ReduceMotion)
+
+        var systemAnimationsEnabled = true;
+        try { systemAnimationsEnabled = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled; }
+        catch { }
+
+        void SuppressSettingsTransitions()
         {
             dialog.Transitions.Clear();
             settingsScroll.Transitions.Clear();
             panel.Transitions.Clear();
+            foreach (var element in Descendants(dialog).OfType<UIElement>()) element.Transitions.Clear();
         }
-        dialog.Opened += (_, _) => theme.Focus(FocusState.Programmatic);
+
+        var shouldReduceMotion = settings.ReduceMotion || !systemAnimationsEnabled;
+        if (shouldReduceMotion) SuppressSettingsTransitions();
+        motion.Toggled += (_, _) =>
+        {
+            if (motion.IsOn || !systemAnimationsEnabled) SuppressSettingsTransitions();
+        };
+        dialog.Opened += (_, _) =>
+        {
+            if (motion.IsOn || !systemAnimationsEnabled) SuppressSettingsTransitions();
+            theme.Focus(FocusState.Programmatic);
+        };
 
         bool clearRequested = false;
-        bool passwordsRequested = false;
-        bool importRequested = false;
-        passwords.Click += (_, _) => { passwordsRequested = true; dialog.Hide(); };
         clearData.Click += (_, _) => { clearRequested = true; dialog.Hide(); };
-        importData.Click += (_, _) => { importRequested = true; dialog.Hide(); };
 
         var result = await ShowDialogAsync(dialog);
-        if (passwordsRequested) { await ShowPasswordManagerAsync(); return; }
         if (clearRequested) { await ClearAllBrowsingDataAsync(); return; }
-        if (importRequested) { await ShowImportBrowserDataAsync(); return; }
         if (result != ContentDialogResult.Primary) return;
 
         settings.Theme = theme.SelectedItem as string ?? "System";
@@ -820,6 +835,7 @@ public sealed partial class MainWindow
         settings.SearchEngine = engine.SelectedItem as string ?? "DuckDuckGo";
         settings.StartupBehavior = startupBehavior.SelectedItem as string ?? "Restore previous session";
         settings.DeveloperToolsEnabled = devTools.IsOn;
+        settings.HardenedIsolation = hardenedIsolationToggle.IsOn;
         settings.ShowBookmarksBar = bookmarksBarToggle.IsOn;
 
         var customPath = downloadLocation.Text.Trim();
@@ -858,13 +874,12 @@ public sealed partial class MainWindow
         }
 
         settings.AskDownloadLocation = askDownload.IsOn;
-        settings.AutofillPasswords = autofillPasswords.IsOn;
 
         foreach (var runtime in _runtimes.Values)
         {
             if (runtime.View.CoreWebView2 is { } core)
             {
-                core.Settings.AreDevToolsEnabled = settings.DeveloperToolsEnabled || App.SmokeOutput is not null;
+                core.Settings.AreDevToolsEnabled = settings.DeveloperToolsEnabled;
             }
         }
 
@@ -876,101 +891,6 @@ public sealed partial class MainWindow
         ApplyAppearance(); RenderBookmarksBar(); await RefreshAsync(); QueueSave();
     }
 
-    private Func<Task<string?>>? _passwordImportFilePickerOverride;
-
-    private async Task<string?> PickPasswordImportFileAsync()
-    {
-        if (_passwordImportFilePickerOverride is not null) return await _passwordImportFilePickerOverride();
-        try
-        {
-            var picker = new Windows.Storage.Pickers.FileOpenPicker();
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary;
-            picker.FileTypeFilter.Add(".csv");
-            var file = await picker.PickSingleFileAsync();
-            return file?.Path;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.Runtime.InteropServices.COMException)
-        {
-            Notify("The browser-data picker is unavailable.");
-            return null;
-        }
-    }
-
-    private async Task ShowImportBrowserDataAsync()
-    {
-        const string warningText = "Password export files contain passwords in plaintext. After importing, delete the exported file from disk when you no longer need it.";
-        var warning = new TextBlock
-        {
-            Text = warningText,
-            Width = 440,
-            TextWrapping = TextWrapping.Wrap
-        };
-        AutomationProperties.SetName(warning, warningText);
-        AutomationProperties.SetAutomationId(warning, "PasswordImportPlaintextWarning");
-        var warningDialog = Dialog("Import browser data", new StackPanel
-        {
-            Width = 440,
-            Spacing = 10,
-            Children =
-            {
-                new TextBlock { Text = "Passwords from CSV", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
-                warning
-            }
-        }, "Cancel");
-        warningDialog.PrimaryButtonText = "Choose CSV";
-        warningDialog.DefaultButton = ContentDialogButton.Primary;
-        if (await ShowDialogAsync(warningDialog) != ContentDialogResult.Primary) return;
-
-        string? filePath = await PickPasswordImportFileAsync();
-        if (filePath is null) return;
-
-        try
-        {
-            string? directory = Path.GetDirectoryName(filePath);
-            var info = new FileInfo(filePath);
-            if (!DownloadSafety.IsSafeLocalDirectory(directory) || !info.Exists ||
-                !string.Equals(info.Extension, ".csv", StringComparison.OrdinalIgnoreCase) ||
-                info.Length > BrowserDataImportService.MaximumImportBytes)
-            {
-                Notify("Choose a local browser password CSV no larger than 16 MB.");
-                return;
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            Notify("The selected password export is unavailable.");
-            return;
-        }
-
-        try
-        {
-            using var package = await Task.Run(() =>
-            {
-                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
-                return new BrowserDataImportService().ParseCsv(stream);
-            });
-            var result = await CredentialImportCoordinator.ImportAsync(_credentialVault, package);
-            string counts = $"Total {result.Total} · Imported {result.Imported} · Skipped {result.Skipped}\n" +
-                $"Duplicates {result.Duplicates} · Conflicts {result.Conflicts} · Invalid {result.Invalid} · Failed {result.Failed}";
-            var completion = new TextBlock
-            {
-                Text = counts,
-                Width = 440,
-                TextWrapping = TextWrapping.Wrap
-            };
-            AutomationProperties.SetName(completion, "Password import result. " + counts.Replace('\n', ' '));
-            AutomationProperties.SetAutomationId(completion, "PasswordImportCompletionCounts");
-            var completionDialog = Dialog("Password import complete", completion);
-            completionDialog.DefaultButton = ContentDialogButton.Close;
-            await ShowDialogAsync(completionDialog);
-        }
-        catch (Exception ex) when (ex is BrowserDataImportException or CredentialVaultException or IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
-        {
-            Notify("The browser data could not be imported. The selected file may be invalid, unsupported, or unavailable.");
-        }
-    }
-
     private async Task ClearAllBrowsingDataAsync()
     {
         var timeRanges = new[] { "Last hour", "Last 24 hours", "Last 7 days", "Last 4 weeks", "All time" };
@@ -979,9 +899,7 @@ public sealed partial class MainWindow
         var chkDownloads = new CheckBox { Content = "Download history", IsChecked = true };
         var chkCookies = new CheckBox { Content = "Cookies and other site data", IsChecked = true };
         var chkCache = new CheckBox { Content = "Cached images and files", IsChecked = true };
-        var chkPasswords = new CheckBox { Content = "Saved passwords (credential vault)", IsChecked = false };
-        chkPasswords.Checked += (_, _) => { timeCombo.SelectedItem = "All time"; timeCombo.IsEnabled = false; };
-        chkPasswords.Unchecked += (_, _) => timeCombo.IsEnabled = true;
+        var chkPasswords = new CheckBox { Content = "Passwords and autofill data", IsChecked = false };
 
         var panel = new StackPanel
         {
@@ -996,7 +914,7 @@ public sealed partial class MainWindow
                 chkCookies,
                 chkCache,
                 chkPasswords,
-                new TextBlock { Text = "Open tabs and downloaded files are kept. Password clearing permanently deletes credentials.", FontSize = 11, Opacity = .6, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) }
+                new TextBlock { Text = "Open tabs and downloaded files are kept.", FontSize = 11, Opacity = .6, TextWrapping = TextWrapping.Wrap, Margin = new(0, 4, 0, 0) }
             }
         };
 
@@ -1045,8 +963,7 @@ public sealed partial class MainWindow
             if (clearHistory) kinds |= CoreWebView2BrowsingDataKinds.BrowsingHistory;
             if (clearDownloads) kinds |= CoreWebView2BrowsingDataKinds.DownloadHistory;
             if (clearPasswords) kinds |= CoreWebView2BrowsingDataKinds.PasswordAutosave | CoreWebView2BrowsingDataKinds.GeneralAutofill;
-            if (kinds == 0 && !clearPasswords) { Notify("Choose at least one data category to clear."); return; }
-            if (clearPasswords && since.HasValue) { Notify("Saved passwords can only be cleared for all time."); return; }
+            if (kinds == 0) { Notify("Choose at least one data category to clear."); return; }
 
             if (kinds != 0)
             {
@@ -1091,13 +1008,6 @@ public sealed partial class MainWindow
                     _session.State.Downloads.RemoveAll(download => !_downloadOperations.ContainsKey(download.Id));
             }
 
-            if (clearPasswords)
-            {
-                var allCreds = await _credentialVault.ListAsync();
-                foreach (var cred in allCreds)
-                    await _credentialVault.DeleteAsync(cred.Id, cred.Revision);
-            }
-
             foreach (var runtime in _runtimes.Values)
             {
                 runtime.SecureNavigation = false; runtime.CertificateError = false;
@@ -1105,7 +1015,7 @@ public sealed partial class MainWindow
             }
             RenderSidebar(); QueueSave(); Notify("Browsing data cleared. Downloaded files were not deleted.");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or CredentialVaultException or System.Runtime.InteropServices.COMException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
             Notify("Browsing data could not be cleared: " + ex.Message);
         }
@@ -1212,24 +1122,12 @@ public sealed partial class MainWindow
             }
         }
 
-        if (cert is null && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
+        if (cert is null && runtime?.LastCertificate is null && runtime?.CertificateError != true &&
+            Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
         {
             try
             {
-                using var client = new TcpClient();
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                await client.ConnectAsync(uri.Host, uri.Port > 0 ? uri.Port : 443, cts.Token);
-                using var sslStream = new SslStream(
-                    client.GetStream(),
-                    false,
-                    (_, remoteCert, _, _) => true);
-                await sslStream.AuthenticateAsClientAsync(
-                    new SslClientAuthenticationOptions { TargetHost = uri.Host },
-                    cts.Token);
-                if (sslStream.RemoteCertificate is not null)
-                {
-                    cert = new X509Certificate2(sslStream.RemoteCertificate);
-                }
+                cert = await ProbeServerCertificateAsync(uri, TimeSpan.FromSeconds(3));
             }
             catch (Exception ex)
             {
@@ -1252,14 +1150,14 @@ public sealed partial class MainWindow
                 panel.Children.Add(new TextBlock { Text = certErrorDetail, Foreground = _theme.AccentPrimaryBrush, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
             }
 
-            AddRow("Subject", cert.Subject);
-            AddRow("Issuer", cert.Issuer);
-            AddRow("Validity", $"From {cert.NotBefore.ToLocalTime():yyyy-MM-dd HH:mm} to {cert.NotAfter.ToLocalTime():yyyy-MM-dd HH:mm} ({(DateTime.Now > cert.NotAfter ? "Expired" : "Valid")})");
-            AddRow("Thumbprint (SHA-1)", cert.Thumbprint);
-            AddRow("Serial Number", cert.SerialNumber);
+            AddRow("Subject", SafeCertificateValue(() => cert.Subject));
+            AddRow("Issuer", SafeCertificateValue(() => cert.Issuer));
+            AddRow("Validity", FormatCertificateValidity(cert.NotBefore, cert.NotAfter, DateTime.Now));
+            AddRow("Thumbprint (SHA-1)", SafeCertificateValue(() => cert.Thumbprint));
+            AddRow("Serial Number", SafeCertificateValue(() => cert.SerialNumber));
             if (cert.SignatureAlgorithm?.FriendlyName is { } sigAlg)
             {
-                AddRow("Signature Algorithm", sigAlg);
+                AddRow("Signature Algorithm", SafeCertificateValue(() => sigAlg));
             }
         }
         else if (runtime?.LastCertificate is not null)
@@ -1278,12 +1176,13 @@ public sealed partial class MainWindow
                 panel.Children.Add(new TextBlock { Text = certErrorDetail, Foreground = _theme.AccentPrimaryBrush, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
             }
 
-            AddRow("Subject", rawCert.Subject);
-            AddRow("Issuer", rawCert.Issuer);
-            var validFrom = DateTimeOffset.FromUnixTimeSeconds((long)rawCert.ValidFrom).LocalDateTime;
-            var validTo = DateTimeOffset.FromUnixTimeSeconds((long)rawCert.ValidTo).LocalDateTime;
-            AddRow("Validity", $"From {validFrom:yyyy-MM-dd HH:mm} to {validTo:yyyy-MM-dd HH:mm} ({(DateTime.Now > validTo ? "Expired" : "Valid")})");
-            AddRow("Serial Number", rawCert.DerEncodedSerialNumber);
+            AddRow("Subject", SafeCertificateValue(() => rawCert.Subject));
+            AddRow("Issuer", SafeCertificateValue(() => rawCert.Issuer));
+            string validity;
+            try { validity = FormatCertificateValidity(rawCert.ValidFrom, rawCert.ValidTo, DateTime.Now); }
+            catch { validity = "Unavailable"; }
+            AddRow("Validity", validity);
+            AddRow("Serial Number", SafeCertificateValue(() => rawCert.DerEncodedSerialNumber));
         }
         else
         {
@@ -1299,6 +1198,39 @@ public sealed partial class MainWindow
         await ShowDialogAsync(dialog);
     }
 
+    internal static async Task<X509Certificate2?> ProbeServerCertificateAsync(Uri uri, TimeSpan timeout)
+    {
+        if (uri.Scheme != Uri.UriSchemeHttps || timeout <= TimeSpan.Zero)
+            throw new ArgumentException("A positive timeout and HTTPS URI are required.");
+        using var client = new TcpClient();
+        using var cts = new CancellationTokenSource(timeout);
+        await client.ConnectAsync(uri.Host, uri.Port > 0 ? uri.Port : 443, cts.Token);
+        using var sslStream = new SslStream(client.GetStream(), false);
+        await sslStream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = uri.Host }, cts.Token);
+        return sslStream.RemoteCertificate is null ? null : new X509Certificate2(sslStream.RemoteCertificate);
+    }
+
+    internal static string FormatCertificateValidity(double validFrom, double validTo, DateTime now)
+    {
+        if (!double.IsFinite(validFrom) || !double.IsFinite(validTo) ||
+            validFrom < DateTimeOffset.MinValue.ToUnixTimeSeconds() || validFrom > DateTimeOffset.MaxValue.ToUnixTimeSeconds() ||
+            validTo < DateTimeOffset.MinValue.ToUnixTimeSeconds() || validTo > DateTimeOffset.MaxValue.ToUnixTimeSeconds())
+            return "Unavailable";
+        return FormatCertificateValidity(
+            DateTimeOffset.FromUnixTimeSeconds((long)validFrom).LocalDateTime,
+            DateTimeOffset.FromUnixTimeSeconds((long)validTo).LocalDateTime,
+            now);
+    }
+
+    private static string FormatCertificateValidity(DateTime validFrom, DateTime validTo, DateTime now)
+        => $"From {validFrom.ToLocalTime():yyyy-MM-dd HH:mm} to {validTo.ToLocalTime():yyyy-MM-dd HH:mm} ({(now > validTo ? "Expired" : now < validFrom ? "Not yet valid" : "Valid")})";
+
+    private static string SafeCertificateValue(Func<string?> read)
+    {
+        try { return BrowserText.SanitizeLabel(read(), 2048); }
+        catch { return "Unavailable"; }
+    }
+
     private async Task ShowDownloadsAsync()
     {
         var rows = new StackPanel { Width = 520, Spacing = 16 };
@@ -1311,10 +1243,11 @@ public sealed partial class MainWindow
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
             var open = IconButton("\uE8E5", "Open file", () =>
             {
-                if (File.Exists(entry.Path))
+                if (File.Exists(entry.Path) && DownloadSafety.IsSafeLocalFilePath(entry.Path) &&
+                    !Navigation.IsDangerousExtension(Path.GetExtension(entry.Path)))
                     Process.Start(new ProcessStartInfo(entry.Path) { UseShellExecute = true });
                 else
-                    Notify("The downloaded file no longer exists.");
+                    Notify("The downloaded file no longer exists or is no longer safe to open.");
             });
             var pause = IconButton("\uE769", "Pause download", () => { if (_downloadOperations.TryGetValue(entry.Id, out var op)) op.Pause(); });
             var resume = IconButton("\uE768", "Resume download", () => { if (_downloadOperations.TryGetValue(entry.Id, out var op) && op.CanResume) op.Resume(); });
@@ -1322,7 +1255,8 @@ public sealed partial class MainWindow
             var folder = IconButton("\uE8B7", "Show in folder", () =>
             {
                 var directory = Path.GetDirectoryName(entry.Path);
-                if (File.Exists(entry.Path))
+                if (File.Exists(entry.Path) && DownloadSafety.IsSafeLocalFilePath(entry.Path) &&
+                    !Navigation.IsDangerousExtension(Path.GetExtension(entry.Path)))
                     Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{entry.Path}\"") { UseShellExecute = true });
                 else if (directory is not null && Directory.Exists(directory) && DownloadSafety.IsSafeLocalDirectory(directory))
                     Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
@@ -1337,7 +1271,8 @@ public sealed partial class MainWindow
                 state.Text = entry.Status + " · " + FormatBytes(entry.BytesReceived) + (entry.TotalBytes is > 0 ? " / " + FormatBytes(entry.TotalBytes.Value) : "");
                 progress.IsIndeterminate = entry.TotalBytes is not > 0 && entry.Status == "Downloading";
                 progress.Value = entry.TotalBytes is > 0 ? Math.Min(100, 100d * entry.BytesReceived / entry.TotalBytes.Value) : 0;
-                open.IsEnabled = entry.Status == "Completed" && File.Exists(entry.Path);
+                open.IsEnabled = entry.Status == "Completed" && File.Exists(entry.Path) &&
+                    DownloadSafety.IsSafeLocalFilePath(entry.Path) && !Navigation.IsDangerousExtension(Path.GetExtension(entry.Path));
                 pause.IsEnabled = op?.State == CoreWebView2DownloadState.InProgress;
                 resume.IsEnabled = op?.CanResume == true && op.State == CoreWebView2DownloadState.Interrupted;
                 cancel.IsEnabled = op is not null && entry.Status is "Downloading" or "Paused";

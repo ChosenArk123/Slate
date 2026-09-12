@@ -102,6 +102,7 @@ public sealed class BrowserSettings
     public string? DownloadPath { get; set; }
     public bool AskDownloadLocation { get; set; }
     public bool AutofillPasswords { get; set; } = true;
+    public bool HardenedIsolation { get; set; }
 
     public static int SleepOptionToMinutes(string? option)
     {
@@ -166,6 +167,7 @@ public sealed class DownloadEntry
     public long BytesReceived { get; set; }
     public long? TotalBytes { get; set; }
     public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+    public bool IsPrivate { get; set; }
 }
 
 public sealed class WindowPlacement

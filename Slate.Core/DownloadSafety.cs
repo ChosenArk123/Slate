@@ -28,7 +28,8 @@ public static class DownloadSafety
         var sb = new System.Text.StringBuilder(name.Length);
         foreach (char c in name)
         {
-            if (c < 32 || c == 127 || c == ':' || InvalidFileNameChars.Contains(c))
+            if (char.IsControl(c) || char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format ||
+                c == ':' || InvalidFileNameChars.Contains(c))
                 sb.Append('_');
             else
                 sb.Append(c);
@@ -102,6 +103,9 @@ public static class DownloadSafety
         try
         {
             string trimmed = path.Trim();
+            if (!string.Equals(path, trimmed, StringComparison.Ordinal)) return false;
+            if (trimmed.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment.EndsWith('.') || segment.EndsWith(' '))) return false;
             // Block UNC network paths (\\server\share) to prevent SMB credential/NTLM hash leakage
             if (trimmed.StartsWith(@"\\") || trimmed.StartsWith("//"))
                 return false;
@@ -123,6 +127,47 @@ public static class DownloadSafety
                 if (current.Exists && (current.Attributes & FileAttributes.ReparsePoint) != 0) return false;
             }
             return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool IsSafeLocalFilePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            string trimmed = path.Trim();
+            if (!string.Equals(path, trimmed, StringComparison.Ordinal)) return false;
+            if (trimmed.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment.EndsWith('.') || segment.EndsWith(' '))) return false;
+            if (trimmed.StartsWith(@"\\") || trimmed.StartsWith("//")) return false;
+            string fullPath = Path.GetFullPath(trimmed);
+            string root = Path.GetPathRoot(fullPath) ?? "";
+            if (root.Length != 3 || !char.IsLetter(root[0]) || root[1] != ':' || !Path.EndsInDirectorySeparator(root)) return false;
+            string fileName = Path.GetFileName(fullPath);
+            if (string.IsNullOrWhiteSpace(fileName) ||
+                !string.Equals(SanitizeFileName(fileName, ""), fileName, StringComparison.Ordinal)) return false;
+            string? directory = Path.GetDirectoryName(fullPath);
+            if (!IsSafeLocalDirectory(directory) || Directory.Exists(fullPath)) return false;
+            if (File.Exists(fullPath) && (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0) return false;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryDeleteIncompleteFile(string? path)
+    {
+        if (!IsSafeLocalFilePath(path)) return false;
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+            return !File.Exists(path);
         }
         catch
         {

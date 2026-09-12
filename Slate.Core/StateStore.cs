@@ -36,7 +36,8 @@ public sealed class StateStore(string directory)
         {
             Directory.CreateDirectory(DirectoryPath);
             SanitizeTextFields(state);
-            var persistedTabs = state.Tabs.Where(tab => (!tab.IsTemporary || tab.IsPinned) && !tab.IsPrivate).ToList();
+            var persistedTabs = state.Tabs.Where(tab => (!tab.IsTemporary || tab.IsPinned) && !tab.IsPrivate &&
+                (tab.Url == Navigation.NewTab || Navigation.IsWebUrl(tab.Url))).ToList();
             var persistedWorkspaces = state.Workspaces.Select(w =>
             {
                 var tabExists = persistedTabs.Any(t => t.WorkspaceId == w.Id && t.Id == w.ActiveTabId);
@@ -53,10 +54,10 @@ public sealed class StateStore(string directory)
                 Tabs = persistedTabs,
                 Workspaces = persistedWorkspaces,
                 ActiveWorkspaceId = state.ActiveWorkspaceId,
-                RecentlyClosed = state.RecentlyClosed.Where(tab => !tab.IsTemporary && !tab.IsPrivate).ToList(),
+                RecentlyClosed = state.RecentlyClosed.Where(tab => !tab.IsTemporary && !tab.IsPrivate && Navigation.IsWebUrl(tab.Url)).ToList(),
                 Bookmarks = state.Bookmarks,
                 History = state.History,
-                Downloads = state.Downloads,
+                Downloads = state.Downloads.Where(download => !download.IsPrivate).ToList(),
                 Settings = state.Settings,
                 Window = state.Window
             };

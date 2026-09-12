@@ -14,6 +14,8 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Ellipse = Microsoft.UI.Xaml.Shapes.Ellipse;
 using Slate.Core;
+using Slate.Engine;
+using Slate.Services;
 using Windows.System;
 using Windows.UI;
 using Windows.UI.ViewManagement;
@@ -29,6 +31,11 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, Task<BitmapImage?>> _inFlightFaviconLoads = new();
     private int _uiFaviconGeneration;
     private readonly BrowserSession _session;
+    private readonly BrowserEngineService _engineService;
+    private readonly TabManagerService _tabManager = new();
+    private readonly NavigationCoordinator _navigationCoordinator = new();
+    private readonly DownloadCoordinator _downloadCoordinator = new();
+    private readonly GamingEfficiencyService _gamingEfficiencyService;
     private readonly Grid _root = new();
     private readonly Grid _body = new();
     private readonly Grid _sidebar = new();
@@ -84,9 +91,17 @@ public sealed partial class MainWindow : Window
         Title = "Slate";
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Slate.ico"));
         _store = new StateStore(App.ProfileDirectory);
-        _credentialVault = new CredentialVault(App.ProfileDirectory, new WindowsCredentialProtector());
         _faviconStore = new FaviconStore(Path.Combine(App.ProfileDirectory, "favicons"));
         _session = new BrowserSession(_store.Load());
+        bool hardenedIsolation = App.HasHardenedIsolationArg || _session.State.Settings.HardenedIsolation;
+        _engineService = new BrowserEngineService(App.ProfileDirectory, hardenedIsolation);
+        _tabManager.FocusedTabIdProvider = () => _focusedTabId;
+        _gamingEfficiencyService = new GamingEfficiencyService(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            DispatcherQueue,
+            () => _tabManager.GetActiveCoreViews(),
+            () => _tabManager.GetFocusedCoreView(),
+            () => _engineService.GetProcessInfos());
         BuildShell();
         Content = _root;
         SystemBackdrop = new MicaBackdrop();
@@ -111,7 +126,6 @@ public sealed partial class MainWindow : Window
             _ready = true;
             await RefreshAsync();
             if (_store.LastError is { } error) Notify(error);
-            if (App.SmokeOutput is not null) await RunSmokeTestsAsync(App.SmokeOutput);
         };
         AppWindow.Closing += (_, _) => Shutdown();
         Closed += (_, _) => Shutdown();
@@ -202,7 +216,6 @@ public sealed partial class MainWindow : Window
         _security = IconButton("\uE946", "Site information and permissions", () => ShowSiteInfoAsync());
         var split = IconButton("\uE89F", "Split view · Ctrl+Shift+S", () => ToggleSplitAsync());
         var menu = IconButton("\uE712", "Browser menu", () => ShowPaletteAsync());
-        _passwordButton = IconButton("\uE8D7", "Passwords", ShowPasswordsForPageAsync);
         _zoomBadge.Content = "100%";
         _zoomBadge.Height = 34;
         _zoomBadge.FontSize = 11;
@@ -216,7 +229,7 @@ public sealed partial class MainWindow : Window
         _zoomBadge.Click += (_, _) => ZoomReset();
         _bookmarkButton = IconButton("\uE734", "Bookmark this tab · Ctrl+D", () => ToggleBookmarkAsync());
         _downloadsButton = IconButton("\uE896", "Downloads · Ctrl+J", () => ShowDownloadsAsync());
-        FrameworkElement[] toolbarItems = [_collapse, _back, _forward, _reload, _security, _address, _bookmarkButton, _zoomBadge, _downloadsButton, _passwordButton, split, menu];
+        FrameworkElement[] toolbarItems = [_collapse, _back, _forward, _reload, _security, _address, _bookmarkButton, _zoomBadge, _downloadsButton, split, menu];
         for (int i = 0; i < toolbarItems.Length; i++)
         {
             toolbar.ColumnDefinitions.Add(new() { Width = toolbarItems[i] == _address ? new(1, GridUnitType.Star) : GridLength.Auto });
@@ -377,16 +390,6 @@ public sealed partial class MainWindow : Window
         pageContainer.Children.Add(_panes);
         pageContainer.Children.Add(_findBar);
         _pageFrame.Child = pageContainer;
-        Grid.SetRow(_passwordNotice, 1); _content.Children.Add(_passwordNotice);
-        _passwordOfferAcceptButton.Click += async (_, _) =>
-        {
-            if (_offeringController is not { } controller) return;
-            bool update = controller.IsUpdate;
-            Notify(await controller.SaveOfferAsync() ? update ? "Password updated." : "Password saved."
-                : "Password was not saved. The entry or page may have changed.");
-        };
-        _passwordNotice.ActionButton = _passwordOfferAcceptButton;
-        _passwordNotice.CloseButtonClick += (_, _) => _offeringController?.Dismiss();
         Grid.SetRow(_pageFrame, 2); _content.Children.Add(_pageFrame);
         Grid.SetRow(_progress, 2); _content.Children.Add(_progress);
         _status.Margin = new(8, 3, 8, 0); Grid.SetRow(_status, 3); _content.Children.Add(_status);
@@ -1198,7 +1201,30 @@ public sealed partial class MainWindow : Window
         _commandRouter.Dispose();
         _root.ActualThemeChanged -= OnThemeChanged;
         _uiSettings.ColorValuesChanged -= OnSystemColorValuesChanged;
+        foreach (var download in _session.State.Downloads.Where(item => _downloadOperations.ContainsKey(item.Id)))
+        {
+            try
+            {
+                var operation = _downloadOperations[download.Id];
+                if (operation.State != Microsoft.Web.WebView2.Core.CoreWebView2DownloadState.Completed)
+                {
+                    operation.Cancel();
+                    DownloadSafety.TryDeleteIncompleteFile(download.Path);
+                    download.Path = "";
+                    download.Status = "Interrupted";
+                }
+            }
+            catch
+            {
+                DownloadSafety.TryDeleteIncompleteFile(download.Path);
+                download.Path = "";
+                download.Status = "Interrupted";
+            }
+        }
+        _downloadOperations.Clear();
         foreach (var id in _runtimes.Keys.ToList()) { DisposeRuntime(id); }
-        _runtimes.Clear(); Save();
+        _runtimes.Clear();
+        _gamingEfficiencyService?.Dispose();
+        Save();
     }
 }

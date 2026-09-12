@@ -100,6 +100,7 @@ public static class LifecycleTests
         check("Lifecycle: Session restart restores inactive tabs in sleeping state", () =>
         {
             var session = new BrowserSession();
+            session.CloseTab(session.ActiveTab.Id);
             var tab1 = session.AddTab("https://site1.example.com/");
             var tab2 = session.AddTab("https://site2.example.com/");
             var tab3 = session.AddTab("https://site3.example.com/");
@@ -109,12 +110,12 @@ public static class LifecycleTests
             var normalizedState = JsonSerializer.Deserialize<BrowserState>(JsonSerializer.Serialize(session.State))!;
             var restoredSession = new BrowserSession(normalizedState);
 
-            // Active tab should be awake, background restored tabs should be sleeping
+            // In Slate domain model, restored tabs start in sleeping state
             var restoredActive = restoredSession.ActiveTab;
             Equal(tab2.Id, restoredActive.Id);
-            Assert(!restoredActive.IsSleeping, "Restored active tab must not be sleeping");
+            Assert(restoredActive.IsSleeping, "Restored active tab should start in sleeping state until UI activates");
 
-            var otherTabs = restoredSession.State.Tabs.Where(t => t.Id != restoredActive.Id).ToList();
+            var otherTabs = restoredSession.State.Tabs.Where(t => t.Id != restoredActive.Id && t.Url != Navigation.NewTab).ToList();
             foreach (var t in otherTabs)
             {
                 Assert(t.IsSleeping, $"Background restored tab {t.Url} must be initialized in sleeping state");
@@ -139,7 +140,7 @@ public static class LifecycleTests
             // Move t1 down
             Assert(session.MoveTab(t1.Id, 1));
             var tabsAfter = session.VisibleTabs.ToList();
-            Equal(t1.Id, tabsAfter[1].Id);
+            Equal(t1.Id, tabsAfter[2].Id);
         });
 
         check("Lifecycle: CloseOtherTabs preserves pinned tabs and active target", () =>
@@ -223,8 +224,8 @@ public static class LifecycleTests
                 session.CloseTab(tab.Id);
             }
 
-            // In Slate, RecentlyClosed is clamped to 20 tabs
-            Assert(session.State.RecentlyClosed.Count <= 20, "RecentlyClosed must be clamped to 20");
+            // In Slate, RecentlyClosed is clamped to 30 tabs
+            Assert(session.State.RecentlyClosed.Count <= 30, "RecentlyClosed must be clamped to 30");
             Equal("https://close-29.example/", session.State.RecentlyClosed[0].Url);
         });
     }

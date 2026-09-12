@@ -77,18 +77,36 @@ public static class Navigation
 
     public static bool IsLocalFileUrl(string? url)
     {
-        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
-        if (!uri.IsFile || uri.IsUnc) return false;
-        var ext = Path.GetExtension(uri.LocalPath);
-        if (IsDangerousExtension(ext)) return false;
-        return true;
+        return TryGetSafeLocalFilePath(url, out _);
+    }
+
+    public static bool TryGetSafeLocalFilePath(string? url, out string path)
+    {
+        path = "";
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            !uri.IsFile || uri.IsUnc || !string.IsNullOrEmpty(uri.Host)) return false;
+        try
+        {
+            var localPath = uri.LocalPath.Replace('/', '\\');
+            if (!DownloadSafety.IsSafeLocalFilePath(localPath)) return false;
+            path = Path.GetFullPath(localPath);
+            return !IsDangerousExtension(Path.GetExtension(path));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static bool IsDangerousExtension(string? extension)
     {
         if (string.IsNullOrEmpty(extension)) return false;
-        var ext = extension.TrimStart('.').ToLowerInvariant();
-        return ext is "exe" or "bat" or "cmd" or "ps1" or "vbs" or "msi" or "dll" or "com" or "scr" or "reg" or "hta" or "cpl" or "pif";
+        var ext = extension.Trim().TrimEnd('.', ' ').TrimStart('.').ToLowerInvariant();
+        return ext is "app" or "application" or "appinstaller" or "appref-ms" or "bat" or "cmd" or "com" or
+            "cpl" or "diagcab" or "dll" or "exe" or "gadget" or "hta" or "inf" or "ins" or "iso" or "isp" or
+            "jar" or "jnlp" or "js" or "jse" or "lnk" or "msc" or "msi" or "msp" or "mst" or "ocx" or "pif" or
+            "ps1" or "ps1xml" or "ps2" or "ps2xml" or "psc1" or "psc2" or "reg" or "scf" or "scr" or "sct" or
+            "shb" or "sys" or "url" or "vb" or "vbe" or "vbs" or "ws" or "wsc" or "wsf" or "wsh";
     }
 
     public static bool IsViewSourceUrl(string? url)

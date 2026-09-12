@@ -10,6 +10,8 @@ using Ellipse = Microsoft.UI.Xaml.Shapes.Ellipse;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Slate.Core;
+using Slate.Engine;
+using Slate.Services;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.Graphics.Imaging;
 
@@ -17,41 +19,9 @@ namespace Slate;
 
 public sealed partial class MainWindow
 {
-    private sealed class TabRuntime(WebView2 view)
-    {
-        public WebView2 View { get; } = view;
-        public Task? Initialization { get; set; }
-        public PasswordController? Passwords { get; set; }
-        public bool Suspended { get; set; }
-        public bool Sleeping { get; set; }
-        public string? Error { get; set; }
-        public bool Failed { get; set; }
-        public bool SecureNavigation { get; set; }
-        public bool CertificateError { get; set; }
-        public CoreWebView2Certificate? LastCertificate { get; set; }
-        public CoreWebView2WebErrorStatus? LastCertificateError { get; set; }
-        public double ZoomFactor { get; set; } = 1.0;
-        public BitmapImage? FaviconImage { get; set; }
-        public long FaviconRevision { get; set; }
-        public HashSet<Guid> Downloads { get; } = [];
-        public Action? Teardown { get; set; }
-    }
-    private readonly Dictionary<Guid, TabRuntime> _runtimes = [];
-    private readonly Dictionary<Guid, CoreWebView2DownloadOperation> _downloadOperations = [];
-    private Task<CoreWebView2Environment>? _environment;
+    private Dictionary<Guid, TabRuntime> _runtimes => _tabManager.Runtimes;
+    private Dictionary<Guid, CoreWebView2DownloadOperation> _downloadOperations => _downloadCoordinator.ActiveOperations;
     private int _renderVersion;
-    private readonly Dictionary<string, Queue<DateTimeOffset>> _popupAttempts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Queue<DateTimeOffset> _globalPopupAttempts = [];
-    private readonly Dictionary<string, Queue<DateTimeOffset>> _permissionAttempts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Queue<DateTimeOffset> _globalPermissionAttempts = [];
-    private readonly Dictionary<(string Origin, CoreWebView2PermissionKind Kind), DateTimeOffset> _lastPermissionPrompt = [];
-    private static readonly TimeSpan PopupBurstWindow = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan PermissionBurstWindow = TimeSpan.FromMinutes(1);
-    private static readonly TimeSpan PermissionRepeatWindow = TimeSpan.FromSeconds(30);
-    private const int MaximumPopupsPerBurst = 5;
-    private const int MaximumGlobalPopupsPerBurst = 10;
-    private const int MaximumPermissionPromptsPerBurst = 3;
-    private const int MaximumGlobalPermissionPromptsPerBurst = 6;
     private const int MaximumFaviconBytes = 256 * 1024;
     private const uint MaximumFaviconDimension = 1024;
 
@@ -264,11 +234,7 @@ public sealed partial class MainWindow
     }
     private bool IsVisible(Guid id) => id == _session.ActiveTab.Id || id == _splitTabId;
     private bool IsLive(BrowserTab tab, TabRuntime runtime) => !_closing && _runtimes.TryGetValue(tab.Id, out var current) && ReferenceEquals(current, runtime) && _session.State.Tabs.Contains(tab);
-    private Task<CoreWebView2Environment> GetEnvironmentAsync() => _environment ??=
-        CoreWebView2Environment.CreateWithOptionsAsync(
-            null,
-            Path.Combine(_store.DirectoryPath, "WebView2"),
-            new CoreWebView2EnvironmentOptions { ExclusiveUserDataFolderAccess = true }).AsTask();
+    private Task<CoreWebView2Environment> GetEnvironmentAsync() => _engineService.GetEnvironmentAsync();
 
     private async Task NewTabAsync(string url = Navigation.NewTab, bool temporary = false, bool isPrivate = false)
     {
@@ -291,7 +257,6 @@ public sealed partial class MainWindow
 
     private async Task CloseTabAsync(Guid id)
     {
-        _runtimes.GetValueOrDefault(id)?.Passwords?.Dispose();
         if (_splitTabId == id) _splitTabId = null;
         if (!_runtimes.TryGetValue(id, out var closingRuntime) || closingRuntime.Downloads.Count == 0) DisposeRuntime(id);
         _session.CloseTab(id); _focusedTabId = null;
@@ -303,7 +268,6 @@ public sealed partial class MainWindow
         var closed = _session.CloseOtherTabs(keepTabId);
         foreach (var tab in closed)
         {
-            _runtimes.GetValueOrDefault(tab.Id)?.Passwords?.Dispose();
             if (_splitTabId == tab.Id) _splitTabId = null;
             if (!_runtimes.TryGetValue(tab.Id, out var closingRuntime) || closingRuntime.Downloads.Count == 0) DisposeRuntime(tab.Id);
         }
@@ -316,7 +280,6 @@ public sealed partial class MainWindow
         var closed = _session.CloseTabsBelow(tabId);
         foreach (var tab in closed)
         {
-            _runtimes.GetValueOrDefault(tab.Id)?.Passwords?.Dispose();
             if (_splitTabId == tab.Id) _splitTabId = null;
             if (!_runtimes.TryGetValue(tab.Id, out var closingRuntime) || closingRuntime.Downloads.Count == 0) DisposeRuntime(tab.Id);
         }
@@ -410,15 +373,8 @@ public sealed partial class MainWindow
     private async Task NavigateAsync(string input)
     {
         var tab = FocusedTab;
-        string url;
-        if (Navigation.IsLocalFileUrl(input) || Navigation.IsViewSourceUrl(input))
-        {
-            url = input;
-        }
-        else
-        {
-            url = Navigation.Resolve(input, _session.State.Settings.SearchEngine);
-        }
+        var previousUrl = tab.Url;
+        string url = _navigationCoordinator.ResolveInput(input, _session.State.Settings.SearchEngine);
         _addressEditing = false;
         if (url == Navigation.NewTab)
         {
@@ -426,6 +382,15 @@ public sealed partial class MainWindow
             await RefreshAsync(); QueueSave(); return;
         }
         tab.Url = url;
+        bool restrictedDocument = Navigation.IsLocalFileUrl(url) || Navigation.IsViewSourceUrl(url);
+        bool previousRestrictedDocument = Navigation.IsLocalFileUrl(previousUrl) || Navigation.IsViewSourceUrl(previousUrl);
+        if (restrictedDocument != previousRestrictedDocument && _runtimes.ContainsKey(tab.Id))
+        {
+            DisposeRuntime(tab.Id);
+            await RefreshAsync();
+            UpdateChrome(); QueueSave(); FocusPage();
+            return;
+        }
         if (_runtimes.TryGetValue(tab.Id, out var runtime) && runtime.View.CoreWebView2 is { } core && !runtime.Failed)
         {
             runtime.SecureNavigation = false; runtime.CertificateError = false; runtime.FaviconImage = null; runtime.FaviconRevision++;
@@ -437,7 +402,7 @@ public sealed partial class MainWindow
             }
             else
             {
-                core.Settings.IsScriptEnabled = true;
+                core.Settings.IsScriptEnabled = !Navigation.IsLocalFileUrl(url);
                 core.Navigate(url);
             }
         }
@@ -518,19 +483,9 @@ public sealed partial class MainWindow
         var core = runtime.View.CoreWebView2;
         core.Settings.AreDefaultContextMenusEnabled = true;
         core.Settings.AreBrowserAcceleratorKeysEnabled = true;
-        core.Settings.AreHostObjectsAllowed = false;
-        core.Settings.IsWebMessageEnabled = false;
-        core.Settings.IsStatusBarEnabled = false;
+        _engineService.ConfigureHardenedSettings(core.Settings, _session.State.Settings.DeveloperToolsEnabled);
         core.Settings.IsZoomControlEnabled = true;
-        core.Settings.IsPasswordAutosaveEnabled = false;
-        core.Settings.IsGeneralAutofillEnabled = false;
         core.Settings.IsSwipeNavigationEnabled = false;
-        core.Settings.AreDevToolsEnabled = _session.State.Settings.DeveloperToolsEnabled || App.SmokeOutput is not null;
-        if (App.SmokeOutput is not null)
-        {
-            var downloadFolder = Path.Combine(_store.DirectoryPath, "Downloads");
-            Directory.CreateDirectory(downloadFolder); core.Profile.DefaultDownloadFolderPath = downloadFolder;
-        }
         SetWebTheme(core);
         Windows.Foundation.TypedEventHandler<CoreWebView2, object> fullScreenHandler = (_, _) =>
         {
@@ -583,7 +538,9 @@ public sealed partial class MainWindow
             }
             else if (Navigation.IsViewSourceUrl(args.Uri))
             {
-                // view-source: is allowed
+                args.Cancel = true;
+                Notify("Use Slate's View Source command to open source safely.");
+                return;
             }
             else if (!Navigation.IsWebUrl(args.Uri) && args.Uri != "about:blank")
             {
@@ -718,7 +675,7 @@ public sealed partial class MainWindow
                 if (IsLive(tab, runtime) && !runtime.CertificateError && string.Equals(Navigation.WebOrigin(core.Source), requestedOrigin, StringComparison.OrdinalIgnoreCase))
                 {
                     args.State = decision.Allow ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
-                    args.SavesInProfile = !tab.IsTemporary && decision.Remember;
+                    args.SavesInProfile = !tab.IsTemporary && !tab.IsPrivate && decision.Remember;
                 }
             }
             catch (Exception ex) { Notify("Permission request dismissed: " + ex.Message); }
@@ -726,8 +683,12 @@ public sealed partial class MainWindow
         };
         core.PermissionRequested += permissionHandler;
 
-        Windows.Foundation.TypedEventHandler<CoreWebView2, CoreWebView2DownloadStartingEventArgs> downloadStartingHandler = (_, args) =>
+        Windows.Foundation.TypedEventHandler<CoreWebView2, CoreWebView2DownloadStartingEventArgs> downloadStartingHandler = async (_, args) =>
         {
+            var deferral = args.GetDeferral();
+            string? reservedPath = null;
+            try
+            {
             if (!IsLive(tab, runtime)) { args.Cancel = true; return; }
             var op = args.DownloadOperation;
             string fallbackFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
@@ -743,16 +704,48 @@ public sealed partial class MainWindow
                 Notify("Slate blocked downloading a file with a dangerous extension.");
                 return;
             }
-            bool handlesDownload = App.SmokeOutput is not null || !_session.State.Settings.AskDownloadLocation;
+            bool askDownloadLocation = _session.State.Settings.AskDownloadLocation;
             string safePath;
             try
             {
                 Directory.CreateDirectory(downloadFolder);
                 if (!DownloadSafety.IsSafeLocalDirectory(downloadFolder)) throw new IOException();
                 core.Profile.DefaultDownloadFolderPath = downloadFolder;
-                safePath = handlesDownload
-                    ? DownloadSafety.ReserveSafeDestinationPath(downloadFolder, args.ResultFilePath)
-                    : Path.Combine(Path.GetFullPath(downloadFolder), DownloadSafety.SanitizeFileName(Path.GetFileName(args.ResultFilePath)));
+                var suggestedName = DownloadSafety.SanitizeFileName(Path.GetFileName(args.ResultFilePath));
+                if (askDownloadLocation)
+                {
+                    var extension = Path.GetExtension(suggestedName);
+                    if (string.IsNullOrEmpty(extension))
+                    {
+                        extension = ".download";
+                        suggestedName += extension;
+                    }
+                    var picker = new Windows.Storage.Pickers.FileSavePicker
+                    {
+                        SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.Downloads,
+                        SuggestedFileName = suggestedName
+                    };
+                    WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+                    picker.FileTypeChoices.Add($"{extension.TrimStart('.').ToUpperInvariant()} file", new List<string> { extension });
+                    var selected = await picker.PickSaveFileAsync();
+                    if (selected is null) { args.Cancel = true; return; }
+                    if (!IsLive(tab, runtime) || !DownloadSafety.IsSafeLocalFilePath(selected.Path) ||
+                        Navigation.IsDangerousExtension(Path.GetExtension(selected.Path)))
+                    {
+                        args.Cancel = true;
+                        Notify("Slate blocked an unsafe download destination.");
+                        return;
+                    }
+                    var selectedDirectory = Path.GetDirectoryName(selected.Path)!;
+                    var selectedName = Path.GetFileName(selected.Path);
+                    await selected.DeleteAsync(Windows.Storage.StorageDeleteOption.PermanentDelete);
+                    safePath = DownloadSafety.ReserveSafeDestinationPath(selectedDirectory, selectedName);
+                }
+                else
+                {
+                    safePath = DownloadSafety.ReserveSafeDestinationPath(downloadFolder, suggestedName);
+                }
+                reservedPath = safePath;
                 if (Navigation.IsDangerousExtension(Path.GetExtension(safePath)))
                 {
                     throw new InvalidOperationException("Dangerous extension");
@@ -770,8 +763,17 @@ public sealed partial class MainWindow
                 Notify("Slate could not reserve a safe local download destination.");
                 return;
             }
+            if (!IsLive(tab, runtime))
+            {
+                args.Cancel = true;
+                DownloadSafety.TryDeleteIncompleteFile(reservedPath);
+                return;
+            }
             args.ResultFilePath = safePath;
-            var download = new DownloadEntry { FileName = Path.GetFileName(safePath), Path = safePath, TotalBytes = op.TotalBytesToReceive };
+            var download = new DownloadEntry
+            {
+                FileName = Path.GetFileName(safePath), Path = safePath, TotalBytes = op.TotalBytesToReceive, IsPrivate = tab.IsPrivate
+            };
             _session.State.Downloads.Insert(0, download); _downloadOperations[download.Id] = op;
             runtime.Downloads.Add(download.Id);
             bool unsafeDestination = false;
@@ -779,7 +781,7 @@ public sealed partial class MainWindow
             {
                 if (_closing) return;
                 var currentPath = string.IsNullOrWhiteSpace(op.ResultFilePath) ? safePath : op.ResultFilePath;
-                if (!unsafeDestination && (!DownloadSafety.IsSafeLocalDirectory(Path.GetDirectoryName(currentPath)) || Navigation.IsDangerousExtension(Path.GetExtension(currentPath))))
+                if (!unsafeDestination && (!DownloadSafety.IsSafeLocalFilePath(currentPath) || Navigation.IsDangerousExtension(Path.GetExtension(currentPath))))
                 {
                     unsafeDestination = true;
                     try { if (op.State == CoreWebView2DownloadState.InProgress) op.Cancel(); } catch { }
@@ -798,6 +800,11 @@ public sealed partial class MainWindow
                 DispatcherQueue.TryEnqueue(UpdateDownloadIndicator);
                 if (download.Status is "Completed" or "Canceled" || (download.Status == "Interrupted" && !op.CanResume))
                 {
+                    if (download.Status != "Completed")
+                    {
+                        DownloadSafety.TryDeleteIncompleteFile(safePath);
+                        download.Path = "";
+                    }
                     op.BytesReceivedChanged -= Changed; op.StateChanged -= Changed;
                     _downloadOperations.Remove(download.Id); runtime.Downloads.Remove(download.Id);
                     if (!_session.State.Tabs.Contains(tab) && runtime.Downloads.Count == 0)
@@ -807,8 +814,19 @@ public sealed partial class MainWindow
             void Changed(CoreWebView2DownloadOperation sender, object eventArgs) => Update();
             op.BytesReceivedChanged += Changed; op.StateChanged += Changed;
             Update();
-            // Handle download dialog: prompt if AskDownloadLocation is enabled and not running smoke tests
-            args.Handled = handlesDownload;
+            args.Handled = true;
+            reservedPath = null;
+            }
+            catch
+            {
+                args.Cancel = true;
+                DownloadSafety.TryDeleteIncompleteFile(reservedPath);
+                Notify("Slate could not start this download safely.");
+            }
+            finally
+            {
+                deferral.Complete();
+            }
         };
         core.DownloadStarting += downloadStartingHandler;
 
@@ -820,7 +838,7 @@ public sealed partial class MainWindow
                 runtime.Failed = true;
                 runtime.Error = $"The web process stopped ({args.ProcessFailedKind}, {args.Reason}, exit {args.ExitCode}). Reload this tab to recover.";
                 tab.IsLoading = false;
-                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited) _environment = null;
+                if (args.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited) _engineService.ResetEnvironment();
                 if (IsVisible(tab.Id)) _ = RunAsync(RefreshAsync);
             }
         };
@@ -855,48 +873,20 @@ public sealed partial class MainWindow
             }
             catch { }
         };
-        if (!tab.IsPrivate)
-        {
-            runtime.Passwords = new PasswordController(core, _credentialVault,
-                () => IsLive(tab, runtime) && !runtime.Failed && !runtime.Sleeping && !runtime.Suspended && !tab.IsLoading && !runtime.CertificateError,
-                () => tab.IsTemporary, () => IsLive(tab, runtime) && !runtime.Failed,
-                () => _session.State.Settings.AutofillPasswords, () => tab.IsPrivate, () => tab.Url);
-            runtime.Passwords.OfferChanged += UpdatePasswordOffer;
-            await runtime.Passwords.InitializeAsync();
-            if (!IsLive(tab, runtime)) { runtime.Passwords.Dispose(); return; }
-        }
         if (Navigation.IsViewSourceUrl(tab.Url))
         {
             await LoadViewSourceAsync(tab, runtime, core, tab.Url);
         }
         else
         {
+            core.Settings.IsScriptEnabled = !Navigation.IsLocalFileUrl(tab.Url);
             core.Navigate(tab.Url);
         }
     }
 
-    private bool AllowPopup(string origin, DateTimeOffset now)
-    {
-        if (!_popupAttempts.TryGetValue(origin, out var attempts)) _popupAttempts[origin] = attempts = new();
-        while (attempts.Count > 0 && now - attempts.Peek() > PopupBurstWindow) attempts.Dequeue();
-        while (_globalPopupAttempts.Count > 0 && now - _globalPopupAttempts.Peek() > PopupBurstWindow) _globalPopupAttempts.Dequeue();
-        if (attempts.Count >= MaximumPopupsPerBurst || _globalPopupAttempts.Count >= MaximumGlobalPopupsPerBurst) return false;
-        attempts.Enqueue(now);
-        _globalPopupAttempts.Enqueue(now);
-        return true;
-    }
+    private bool AllowPopup(string origin, DateTimeOffset now) => _engineService.AllowPopup(origin, now);
 
-    private bool AllowPermissionPrompt(string origin, CoreWebView2PermissionKind kind, DateTimeOffset now)
-    {
-        var key = (origin.ToUpperInvariant(), kind);
-        if (_lastPermissionPrompt.TryGetValue(key, out var last) && now - last < PermissionRepeatWindow) return false;
-        if (!_permissionAttempts.TryGetValue(origin, out var attempts)) _permissionAttempts[origin] = attempts = new();
-        while (attempts.Count > 0 && now - attempts.Peek() > PermissionBurstWindow) attempts.Dequeue();
-        while (_globalPermissionAttempts.Count > 0 && now - _globalPermissionAttempts.Peek() > PermissionBurstWindow) _globalPermissionAttempts.Dequeue();
-        if (attempts.Count >= MaximumPermissionPromptsPerBurst || _globalPermissionAttempts.Count >= MaximumGlobalPermissionPromptsPerBurst) return false;
-        attempts.Enqueue(now); _globalPermissionAttempts.Enqueue(now); _lastPermissionPrompt[key] = now;
-        return true;
-    }
+    private bool AllowPermissionPrompt(string origin, CoreWebView2PermissionKind kind, DateTimeOffset now) => _engineService.AllowPermissionPrompt(origin, kind, now);
 
     private static (string Name, string Description, bool RequiresUserInitiation)? PermissionPolicy(CoreWebView2PermissionKind kind) => kind switch
     {
@@ -974,7 +964,6 @@ public sealed partial class MainWindow
 
     private void UpdateChrome()
     {
-        UpdatePasswordOffer();
         if (_closing) return;
         var tab = FocusedTab; var core = CurrentCore();
         if (!_addressEditing) _address.Text = tab.Url == Navigation.NewTab ? "" : tab.Url;
@@ -1237,7 +1226,6 @@ public sealed partial class MainWindow
             if (manual) Notify("Visible, loading, audible, or downloading tabs stay awake."); return;
         }
         runtime.Sleeping = true;
-        runtime.Passwords?.InvalidateForSleep();
         try
         {
             // WinUI delays hiding the underlying controller by 200 ms to avoid a flash.
@@ -1268,11 +1256,6 @@ public sealed partial class MainWindow
         _commandRouter.DetachWebView2(runtime.View);
         runtime.Teardown?.Invoke();
         runtime.Teardown = null;
-        if (runtime.Passwords is not null)
-        {
-            runtime.Passwords.OfferChanged -= UpdatePasswordOffer;
-            runtime.Passwords.Dispose();
-        }
         if (runtime.View.Parent is Panel parent) parent.Children.Remove(runtime.View);
         runtime.View.Close();
     }
@@ -1319,17 +1302,17 @@ public sealed partial class MainWindow
             return;
         }
 
-        var ext = Path.GetExtension(targetPath);
-        if (Navigation.IsDangerousExtension(ext))
+        var ext = Path.GetExtension(targetPath).ToLowerInvariant();
+        if (!DownloadSafety.IsSafeLocalFilePath(targetPath) || ext is not (".mhtml" or ".html" or ".htm"))
         {
-            Notify("Cannot save page with a dangerous file extension.");
+            Notify("Pages can only be saved as HTML or MHTML in a safe local folder.");
             return;
         }
+        targetPath = Path.GetFullPath(targetPath.Trim());
 
         try
         {
-            var lowerExt = ext.ToLowerInvariant();
-            if (lowerExt is ".mhtml")
+            if (ext is ".mhtml")
             {
                 try
                 {
@@ -1340,7 +1323,7 @@ public sealed partial class MainWindow
                         var mhtml = dataElem.GetString();
                         if (!string.IsNullOrEmpty(mhtml))
                         {
-                            await File.WriteAllTextAsync(targetPath, mhtml);
+                            await WritePageFileSafelyAsync(targetPath, mhtml);
                             Notify($"Saved page to {Path.GetFileName(targetPath)}");
                             return;
                         }
@@ -1352,14 +1335,55 @@ public sealed partial class MainWindow
             var rawHtml = await core.ExecuteScriptAsync("document.documentElement.outerHTML");
             var html = System.Text.Json.JsonSerializer.Deserialize<string>(rawHtml) ?? "";
             var fullDoc = "<!DOCTYPE html>\n" + html;
-            await File.WriteAllTextAsync(targetPath, fullDoc);
-            Notify($"Saved page to {Path.GetFileName(targetPath)}");
+            var htmlTarget = targetPath;
+            if (ext == ".mhtml")
+                htmlTarget = DownloadSafety.ReserveSafeDestinationPath(dir!, Path.ChangeExtension(Path.GetFileName(targetPath), ".html"), "page.html");
+            try
+            {
+                await WritePageFileSafelyAsync(htmlTarget, fullDoc);
+            }
+            catch
+            {
+                if (!string.Equals(htmlTarget, targetPath, StringComparison.OrdinalIgnoreCase))
+                    DownloadSafety.TryDeleteIncompleteFile(htmlTarget);
+                throw;
+            }
+            Notify(ext == ".mhtml"
+                ? $"MHTML capture was unavailable. Saved HTML to {Path.GetFileName(htmlTarget)}"
+                : $"Saved page to {Path.GetFileName(htmlTarget)}");
         }
         catch (Exception ex)
         {
             Notify($"Failed to save page: {ex.Message}");
         }
     }
+
+    private static async Task WritePageFileSafelyAsync(string targetPath, string content)
+    {
+        if (!DownloadSafety.IsSafeLocalFilePath(targetPath)) throw new IOException("Unsafe page destination.");
+        string directory = Path.GetDirectoryName(targetPath)!;
+        string temporary = DownloadSafety.ReserveSafeDestinationPath(directory, Path.GetFileName(targetPath) + ".slate-part", "page.slate-part");
+        try
+        {
+            await using (var stream = new FileStream(temporary, FileMode.Truncate, FileAccess.Write, FileShare.None, 8192,
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            await using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)))
+            {
+                await writer.WriteAsync(content);
+                await writer.FlushAsync();
+                stream.Flush(true);
+            }
+            if (!DownloadSafety.IsSafeLocalFilePath(targetPath) || !DownloadSafety.IsSafeLocalDirectory(directory))
+                throw new IOException("The page destination changed while it was being written.");
+            File.Move(temporary, targetPath, true);
+        }
+        finally
+        {
+            DownloadSafety.TryDeleteIncompleteFile(temporary);
+        }
+    }
+
+    private const int MaximumViewSourceCharacters = 4 * 1024 * 1024;
 
     private async Task ViewSourceAsync(string? targetUrl = null)
     {
@@ -1374,7 +1398,7 @@ public sealed partial class MainWindow
         if (Navigation.IsViewSourceUrl(url)) return;
 
         var viewSourceUrl = "view-source:" + url;
-        await NewTabAsync(viewSourceUrl);
+        await NewTabAsync(viewSourceUrl, tab.IsTemporary, tab.IsPrivate);
     }
 
     private async Task LoadViewSourceAsync(BrowserTab tab, TabRuntime runtime, CoreWebView2 core, string viewSourceUrl)
@@ -1388,21 +1412,25 @@ public sealed partial class MainWindow
         {
             if (Navigation.IsLocalFileUrl(targetUrl))
             {
-                var filePath = new Uri(targetUrl).LocalPath;
-                sourceContent = await File.ReadAllTextAsync(filePath);
+                if (!Navigation.TryGetSafeLocalFilePath(targetUrl, out var filePath)) throw new IOException("Unsafe local source path.");
+                await using var file = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, FileOptions.Asynchronous);
+                sourceContent = await ReadBoundedSourceAsync(file);
             }
             else if (Navigation.IsWebUrl(targetUrl))
             {
                 var existingTab = _session.State.Tabs.FirstOrDefault(t => t.Id != tab.Id && t.Url == targetUrl);
                 if (existingTab is not null && _runtimes.TryGetValue(existingTab.Id, out var existingRuntime) && existingRuntime.View.CoreWebView2 is { } existingCore)
                 {
-                    var raw = await existingCore.ExecuteScriptAsync("document.documentElement.outerHTML");
-                    sourceContent = "<!DOCTYPE html>\n" + (System.Text.Json.JsonSerializer.Deserialize<string>(raw) ?? "");
+                    var raw = await existingCore.ExecuteScriptAsync($"document.documentElement.outerHTML.slice(0,{MaximumViewSourceCharacters + 1})");
+                    sourceContent = "<!DOCTYPE html>\n" + BoundViewSource(System.Text.Json.JsonSerializer.Deserialize<string>(raw) ?? "");
                 }
                 else
                 {
                     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                    sourceContent = await client.GetStringAsync(targetUrl);
+                    using var response = await client.GetAsync(targetUrl, HttpCompletionOption.ResponseHeadersRead);
+                    response.EnsureSuccessStatusCode();
+                    await using var stream = await response.Content.ReadAsStreamAsync();
+                    sourceContent = await ReadBoundedSourceAsync(stream);
                 }
             }
             else
@@ -1427,7 +1455,7 @@ public sealed partial class MainWindow
         var sb = new System.Text.StringBuilder();
         sb.Append("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Source of ");
         sb.Append(WebUtility.HtmlEncode(targetUrl));
-        sb.Append("</title><style>");
+        sb.Append("</title><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'\"><style>");
         sb.Append(@"
 body { margin: 0; padding: 16px; background: #121212; color: #dcdcdc; font-family: 'Consolas', 'Cascadia Code', 'Courier New', monospace; font-size: 13px; line-height: 1.5; }
 .line { display: flex; }
@@ -1448,6 +1476,24 @@ body { margin: 0; padding: 16px; background: #121212; color: #dcdcdc; font-famil
         }
         sb.Append("</body></html>");
         return sb.ToString();
+    }
+
+    private static string BoundViewSource(string source)
+        => source.Length <= MaximumViewSourceCharacters ? source :
+            source[..MaximumViewSourceCharacters] + "\n<!-- Source truncated by Slate -->";
+
+    private static async Task<string> ReadBoundedSourceAsync(Stream stream)
+    {
+        using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+        var buffer = new char[8192];
+        var builder = new System.Text.StringBuilder();
+        while (builder.Length <= MaximumViewSourceCharacters)
+        {
+            int read = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, MaximumViewSourceCharacters + 1 - builder.Length)));
+            if (read == 0) break;
+            builder.Append(buffer, 0, read);
+        }
+        return BoundViewSource(builder.ToString());
     }
 
     private async Task OpenLocalFileAsync()
@@ -1476,27 +1522,29 @@ body { margin: 0; padding: 16px; background: #121212; color: #dcdcdc; font-famil
     {
         if (string.IsNullOrWhiteSpace(filePath)) return;
 
-        if (!File.Exists(filePath))
+        var candidateUrl = Uri.TryCreate(filePath, UriKind.Absolute, out var existingUri) && existingUri.IsFile
+            ? existingUri.AbsoluteUri
+            : null;
+        if (candidateUrl is null || !Navigation.TryGetSafeLocalFilePath(candidateUrl, out var safePath))
         {
-            Notify("File does not exist: " + Path.GetFileName(filePath));
+            Notify("Opening unsafe local, network, device, or executable paths is blocked.");
             return;
         }
 
-        var ext = Path.GetExtension(filePath);
+        if (!File.Exists(safePath))
+        {
+            Notify("File does not exist: " + Path.GetFileName(safePath));
+            return;
+        }
+
+        var ext = Path.GetExtension(safePath);
         if (Navigation.IsDangerousExtension(ext))
         {
             Notify($"Opening dangerous file type ({ext}) is blocked.");
             return;
         }
 
-        var uri = new Uri(filePath);
-        if (uri.IsUnc)
-        {
-            Notify("Opening files from network shares (UNC) is blocked.");
-            return;
-        }
-
-        var fileUrl = uri.AbsoluteUri;
+        var fileUrl = new Uri(safePath).AbsoluteUri;
         await NavigateAsync(fileUrl);
     }
 }

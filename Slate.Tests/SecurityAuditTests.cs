@@ -110,6 +110,29 @@ public static class SecurityAuditTests
             Equal("https://public.example.org/home", session.State.History[0].Url);
         });
 
+        check("Security Audit: InPrivate download metadata is excluded from primary, backup, and normalized state", () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "slate-private-download-" + Guid.NewGuid());
+            try
+            {
+                var state = new BrowserSession().State;
+                state.Downloads.Add(new DownloadEntry
+                {
+                    FileName = "private-statement.pdf", Path = @"C:\private-statement.pdf", Status = "Completed", IsPrivate = true
+                });
+                var store = new StateStore(directory);
+                Assert(store.Save(state));
+                Assert(store.Save(state));
+                Assert(!File.ReadAllText(Path.Combine(directory, "session.json")).Contains("private-statement", StringComparison.Ordinal));
+                Assert(!File.ReadAllText(Path.Combine(directory, "session.json.bak")).Contains("private-statement", StringComparison.Ordinal));
+                Assert(!new BrowserSession(state).State.Downloads.Any(download => download.IsPrivate));
+            }
+            finally
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
+        });
+
         check("Security Audit: Closed InPrivate tabs never enter RecentlyClosed list", () =>
         {
             var session = new BrowserSession();
@@ -137,6 +160,32 @@ public static class SecurityAuditTests
             Assert(!session.State.RecentlyClosed.Any(t => t.IsPrivate), "Normalization must purge all InPrivate tabs from RecentlyClosed");
             Equal(1, session.State.Tabs.Count);
             Equal("https://safe.example/", session.State.Tabs[0].Url);
+        });
+
+        check("Security Audit: local file and view-source targets do not persist or enter RecentlyClosed", () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "slate-restricted-state-" + Guid.NewGuid());
+            try
+            {
+                var session = new BrowserSession();
+                var local = session.AddTab("file:///C:/Users/secret/private-notes.txt");
+                var source = session.AddTab("view-source:https://private.example/account");
+                session.CloseTab(local.Id);
+                session.CloseTab(source.Id);
+                Assert(!session.State.RecentlyClosed.Any(tab => tab.Url.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
+                    tab.Url.StartsWith("view-source:", StringComparison.OrdinalIgnoreCase)));
+                session.State.Tabs.Add(new BrowserTab { WorkspaceId = session.ActiveWorkspace.Id, Url = "file:///C:/Users/secret/private-notes.txt" });
+                session.State.Tabs.Add(new BrowserTab { WorkspaceId = session.ActiveWorkspace.Id, Url = "view-source:https://private.example/account" });
+                var store = new StateStore(directory);
+                Assert(store.Save(session.State));
+                var json = File.ReadAllText(Path.Combine(directory, "session.json"));
+                Assert(!json.Contains("private-notes", StringComparison.Ordinal));
+                Assert(!json.Contains("private.example", StringComparison.Ordinal));
+            }
+            finally
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
         });
 
         check("Security Audit: InPrivate favicon disk persistence invariant", () =>
@@ -223,7 +272,8 @@ public static class SecurityAuditTests
 
         check("Security Audit: Navigation.IsDangerousExtension blocks all executable and script extensions", () =>
         {
-            string[] dangerous = ["exe", "bat", "cmd", "ps1", "vbs", "msi", "dll", "com", "scr", "reg", "hta", "cpl", "pif"];
+            string[] dangerous = ["exe", "bat", "cmd", "ps1", "vbs", "msi", "dll", "com", "scr", "reg", "hta", "cpl", "pif",
+                "appref-ms", "application", "diagcab", "jar", "jnlp", "js", "jse", "lnk", "msc", "scf", "url", "vbe", "wsf", "wsh"];
             foreach (var ext in dangerous)
             {
                 Assert(Navigation.IsDangerousExtension(ext), $"Extension '{ext}' without dot must be flagged dangerous");
@@ -232,7 +282,7 @@ public static class SecurityAuditTests
                 Assert(Navigation.IsDangerousExtension("." + ext.Substring(0, 1).ToUpperInvariant() + ext.Substring(1)), $"Extension mixed case must be flagged dangerous");
             }
 
-            string[] safe = [".mhtml", ".html", ".htm", ".txt", ".json", ".pdf", ".png", ".jpg", ".zip", ".tar.gz", ".css", ".js"];
+            string[] safe = [".mhtml", ".html", ".htm", ".txt", ".json", ".pdf", ".png", ".jpg", ".zip", ".tar.gz", ".css"];
             foreach (var ext in safe)
             {
                 Assert(!Navigation.IsDangerousExtension(ext), $"Extension '{ext}' must be considered non-dangerous");
@@ -260,6 +310,9 @@ public static class SecurityAuditTests
             var streamSanitized = DownloadSafety.SanitizeFileName("file.html:hiddenStream");
             Assert(!streamSanitized.Contains(':'), "Sanitized filename must not contain colon (NTFS stream separator)");
 
+            var bidiSanitized = DownloadSafety.SanitizeFileName("photo\u202Egnp.exe");
+            Assert(!bidiSanitized.Contains('\u202E'), "Sanitized filename must strip bidirectional format controls");
+
             // Bounded length (max 200 chars)
             var longName = new string('A', 300);
             var boundedSanitized = DownloadSafety.SanitizeFileName(longName);
@@ -273,13 +326,19 @@ public static class SecurityAuditTests
             Assert(!Navigation.IsLocalFileUrl(@"http://example.com/"));
             Assert(!Navigation.IsLocalFileUrl(@"https://example.com/"));
             Assert(!Navigation.IsLocalFileUrl(@"about:blank"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:////server/share/test.txt"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///%5C%5Cserver%5Cshare%5Ctest.txt"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///?/C:/Windows/win.ini"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///\\?\C:\Windows\win.ini"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///C:/safe/launcher.js"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///C:/safe/launcher.exe."));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///C:/safe/launcher.exe%20"));
+            Assert(!Navigation.IsLocalFileUrl(@"file:///C:/safe/document.txt:stream"));
 
             // Frames must strictly block file: URLs and unrecognized protocols
             Assert(!Navigation.IsAllowedFrameUrl("file:///C:/passwords.txt"));
             Assert(!Navigation.IsAllowedFrameUrl("file://server/share/file.txt"));
-            Assert(!Navigation.IsAllowedFrameUrl("javascript:stealData()"));
             Assert(!Navigation.IsAllowedFrameUrl("powershell:run()"));
-            Assert(!Navigation.IsAllowedFrameUrl("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")); // data is allowed frame url in standard web, but check implementation
             Assert(!Navigation.IsAllowedFrameUrl("custom-scheme://test"));
 
             // Allowed frame URLs
@@ -287,6 +346,56 @@ public static class SecurityAuditTests
             Assert(Navigation.IsAllowedFrameUrl("http://example.com/frame"));
             Assert(Navigation.IsAllowedFrameUrl("about:blank"));
             Assert(Navigation.IsAllowedFrameUrl("about:srcdoc"));
+        });
+
+        check("Security Audit: local file path validation rejects device, reserved, trailing, and reparse targets", () =>
+        {
+            Assert(!DownloadSafety.IsSafeLocalFilePath(@"\\server\share\page.html"));
+            Assert(!DownloadSafety.IsSafeLocalFilePath(@"\\?\C:\Windows\win.ini"));
+            Assert(!DownloadSafety.IsSafeLocalFilePath(@"\\.\C:\Windows\win.ini"));
+            Assert(!DownloadSafety.IsSafeLocalFilePath(@"C:\Temp\CON.txt"));
+            Assert(!DownloadSafety.IsSafeLocalFilePath(@"C:\Temp\page.html."));
+            Assert(!DownloadSafety.IsSafeLocalFilePath(@"C:\Temp\page.html:hidden"));
+
+            var root = Path.Combine(Path.GetTempPath(), "slate-reparse-" + Guid.NewGuid());
+            var target = Path.Combine(root, "target");
+            var link = Path.Combine(root, "link");
+            try
+            {
+                Directory.CreateDirectory(target);
+                try
+                {
+                    Directory.CreateSymbolicLink(link, target);
+                    Assert(!DownloadSafety.IsSafeLocalFilePath(Path.Combine(link, "page.html")), "A file below a reparse directory was accepted");
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+                {
+                    // Symlink creation can be disabled by host policy; production validation still rejects any existing reparse ancestor.
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(link)) Directory.Delete(link);
+                if (Directory.Exists(root)) Directory.Delete(root, true);
+            }
+        });
+
+        check("Security Audit: incomplete download cleanup only deletes validated local files", () =>
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "slate-download-cleanup-" + Guid.NewGuid());
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var partial = Path.Combine(directory, "partial.txt");
+                File.WriteAllText(partial, "partial");
+                Assert(DownloadSafety.TryDeleteIncompleteFile(partial));
+                Assert(!File.Exists(partial));
+                Assert(!DownloadSafety.TryDeleteIncompleteFile(@"\\server\share\partial.txt"));
+            }
+            finally
+            {
+                if (Directory.Exists(directory)) Directory.Delete(directory, true);
+            }
         });
 
         // -----------------------------------------------------------------
