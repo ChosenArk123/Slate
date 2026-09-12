@@ -179,26 +179,6 @@ public sealed partial class MainWindow
         bool target = force ?? !_isUserFullScreen;
         if (_isUserFullScreen == target) return;
         _isUserFullScreen = target;
-
-        if (target)
-        {
-            if (!_isPageFullScreen)
-            {
-                _pageFullscreenText.Text = "Press F11 or Esc to exit full screen";
-                _pageFullscreenIndicator.Visibility = Visibility.Visible;
-                _pageFullscreenTimer.Stop();
-                _pageFullscreenTimer.Start();
-            }
-        }
-        else
-        {
-            if (!_isPageFullScreen)
-            {
-                _pageFullscreenTimer.Stop();
-                _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
-            }
-        }
-
         ApplyFullScreenLayout();
     }
 
@@ -241,9 +221,10 @@ public sealed partial class MainWindow
 
     private void ApplyFullScreenLayout()
     {
-        bool isAnyFullScreen = _isUserFullScreen || _isPageFullScreen;
-        if (isAnyFullScreen)
+        if (_isPageFullScreen)
         {
+            // Webpage element (e.g. YouTube video) requested fullscreen.
+            // Hide all browser chrome so the media fills the entire screen edge-to-edge.
             if (AppWindow.Presenter is OverlappedPresenter op)
             {
                 _wasMaximizedBeforeFullScreen = op.State == OverlappedPresenterState.Maximized;
@@ -266,9 +247,42 @@ public sealed partial class MainWindow
 
             try { AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen); } catch { }
         }
+        else if (_isUserFullScreen)
+        {
+            // User pressed F11 to enter fullscreen mode.
+            // The browser takes the entire screen, but preserves full browser chrome
+            // (all tabs on the left, toolbar, titlebar) just like a maximized window.
+            if (AppWindow.Presenter is OverlappedPresenter op)
+            {
+                _wasMaximizedBeforeFullScreen = op.State == OverlappedPresenterState.Maximized;
+            }
+
+            _topEdgeTrigger.Visibility = Visibility.Collapsed;
+            _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+            _pageFullscreenTimer.Stop();
+
+            _titleBar.Visibility = Visibility.Visible;
+            _root.RowDefinitions[0].Height = new(36);
+
+            _sidebar.Visibility = Visibility.Visible;
+            _body.ColumnDefinitions[0].Width = new(Collapsed ? 64 : 228);
+
+            _toolbarSurface.Visibility = Visibility.Visible;
+            _status.Visibility = Visibility.Visible;
+            _content.RowDefinitions[3].Height = new(24);
+            _content.Margin = new(0, 0, 10, 0);
+
+            _pageFrame.CornerRadius = new(SlateTheme.RadiusMedium);
+            _pageFrame.BorderThickness = new(1);
+
+            try { AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen); } catch { }
+        }
         else
         {
             _topEdgeTrigger.Visibility = Visibility.Collapsed;
+            _pageFullscreenIndicator.Visibility = Visibility.Collapsed;
+            _pageFullscreenTimer.Stop();
+
             _titleBar.Visibility = Visibility.Visible;
             _root.RowDefinitions[0].Height = new(36);
 

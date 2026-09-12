@@ -597,12 +597,12 @@ public sealed partial class MainWindow : Window
     private void RenderSidebar()
     {
         _rendering = true;
-        bool isFullScreen = _isUserFullScreen || _isPageFullScreen;
-        _body.ColumnDefinitions[0].Width = new(isFullScreen ? 0 : (Collapsed ? 64 : 228));
-        _sidebar.Visibility = isFullScreen ? Visibility.Collapsed : Visibility.Visible;
+        bool hideSidebar = _isPageFullScreen;
+        _body.ColumnDefinitions[0].Width = new(hideSidebar ? 0 : (Collapsed ? 64 : 228));
+        _sidebar.Visibility = hideSidebar ? Visibility.Collapsed : Visibility.Visible;
         _workspacePicker.ItemsSource = null; _workspacePicker.ItemsSource = _session.State.Workspaces;
         _workspacePicker.SelectedItem = _session.ActiveWorkspace;
-        _workspacePicker.Visibility = (Collapsed || isFullScreen) ? Visibility.Collapsed : Visibility.Visible;
+        _workspacePicker.Visibility = (Collapsed || hideSidebar) ? Visibility.Collapsed : Visibility.Visible;
         if (Collapsed)
         {
             Grid.SetColumn(_workspaceMenu, 0);
@@ -828,7 +828,7 @@ public sealed partial class MainWindow : Window
 
     private void ToggleSidebar()
     {
-        if (_isUserFullScreen || _isPageFullScreen) return;
+        if (_isPageFullScreen) return;
         var startWidth = _body.ColumnDefinitions[0].ActualWidth;
         _session.State.Settings.SidebarCollapsed = !Collapsed;
         RenderSidebar(); Animate(_sidebar, true); QueueSave();
